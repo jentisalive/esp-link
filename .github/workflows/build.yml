@@ -1,0 +1,101 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    name: iOS / tests + unsigned IPA
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Select available iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for group in d["devices"].values() for x in group if x["isAvailable"] and x["name"].startswith("iPhone")))')
+          echo "SIMULATOR_UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+      - name: Run iOS tests
+        run: |
+          xcodebuild test \
+            -project ios/ESPLink.xcodeproj -scheme ESPLink \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -derivedDataPath build/simulator \
+            -resultBundlePath build/TestResults.xcresult \
+            -parallel-testing-enabled NO CODE_SIGNING_ALLOWED=NO
+      - name: Build unsigned iPhone application
+        run: |
+          xcodebuild build \
+            -project ios/ESPLink.xcodeproj -scheme ESPLink \
+            -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO
+      - name: Package unsigned IPA and simulator app
+        run: |
+          mkdir -p build/package/Payload
+          cp -R build/device/Build/Products/Release-iphoneos/ESPLink.app build/package/Payload/
+          cd build/package
+          zip -qry ../ESPLink-unsigned.ipa Payload
+          cd ../..
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/simulator/Build/Products/Debug-iphonesimulator/ESPLink.app \
+            build/ESPLink-simulator.zip
+          echo 'Unsigned IPA requires signing (e.g. Sideloadly/AltStore). It cannot be installed directly.' > build/INSTALL.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESPLink-iOS-unsigned
+          path: |
+            build/ESPLink-unsigned.ipa
+            build/ESPLink-simulator.zip
+            build/INSTALL.txt
+          retention-days: 14
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iOS-test-results
+          path: build/TestResults.xcresult
+          if-no-files-found: ignore
+          retention-days: 7
+
+  firmware:
+    name: uPesy ESP32 / build + logic tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO
+        run: python -m pip install platformio==6.1.18
+      - name: Test command state machine
+        run: pio test --project-dir firmware --environment native
+      - name: Build firmware
+        run: pio run --project-dir firmware --environment upesy_wroom
+      - name: Merge flash image
+        run: python scripts/package_firmware.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ESPLink-uPesy-firmware
+          path: |
+            dist/firmware/ESPLink-upesy-wroom.bin
+            dist/firmware/FLASH.txt
+          retention-days: 14

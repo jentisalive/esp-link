@@ -1,0 +1,22 @@
+ESP Link firmware / uPesy ESP32 Wroom DevKit (4 MB)
+
+Flash ESPLink-upesy-wroom.bin at offset 0x0, NOT 0x10000.
+The file contains bootloader, partition table and application.
+Only use it with a classic ESP32 WROOM / uPesy Wroom DevKit, not C3/S3/S2.
+
+1. Install Python 3.11+ and esptool:
+   python -m pip install esptool==4.8.1
+2. Connect the board with a USB data cable. Replace COM5 with its real port:
+   python -m esptool --chip esp32 --port COM5 --baud 460800 write_flash 0x0 ESPLink-upesy-wroom.bin
+3. Open Arduino IDE Serial Monitor at 115200 baud, press RESET.
+4. Read "Device token / Wi-Fi password". Enter it in the iOS app.
+5. BLE: Find ESP32 in the app. Wi-Fi: join ESP32-Link-XXXX first, address 192.168.4.1.
+
+If upload cannot connect, hold BOOT while connecting, then release it once flashing starts.
+If flashing is unstable, use --baud 115200.
+Flashing replaces the current application and partition table. Back up your existing firmware first if needed.
+Normal upload preserves NVS token when partition layout is compatible. Full erase changes the token.
+Do not erase the board unless you intend to remove its stored data.
+
+Commands: 1 (three blinks), on, off, status, ping. LED GPIO 2, active HIGH.
+No internet, router, Apple account or app is required for flashing the board.

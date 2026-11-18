@@ -1,0 +1,17 @@
+.DS_Store
+.build/
+DerivedData/
+build/
+dist/
+*.xcuserstate
+xcuserdata/
+*.xcodeproj/
+*.xcworkspace/
+.pio/
+.venv/
+__pycache__/
+*.ipa
+*.p12
+*.mobileprovision
+.env
+firmware/include/secrets.h
