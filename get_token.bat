@@ -14,7 +14,7 @@ echo Connect the ESP32 with a USB DATA cable.
 echo Close Arduino Serial Monitor and other programs using its port.
 echo When the monitor opens, press RESET / EN on the board.
 echo Look for: Device token and Wi-Fi password (separate lines).
-echo Use the 12-character device token in the app, NOT the Wi-Fi password.
+echo Use the device token in the app, NOT the Wi-Fi password.
 echo Keep BOTH private. Press Ctrl+C to exit.
 echo.
 if not exist "%PYTHON%" goto missing_python

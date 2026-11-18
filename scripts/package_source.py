@@ -14,7 +14,8 @@ def main():
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
         # Explicit allowlist prevents accidentally packaging unrelated local files.
         paths = [ROOT / "README.md", ROOT / ".gitignore", ROOT / ".gitattributes"]
-        paths.extend(path for path in [ROOT / "flash_esp32.bat", ROOT / "get_token.bat", ROOT / "change_wifi_password.bat"] if path.is_file())
+        paths.extend(ROOT / name for name in ("flash_esp32.bat", "get_token.bat", "change_wifi_password.bat", "change_device_token.bat")
+                     if (ROOT / name).is_file())
         for name in ["ios", "android", "firmware", ".github", "scripts", "docs"]:
             paths.extend((ROOT / name).rglob("*"))
         for path in sorted(paths):

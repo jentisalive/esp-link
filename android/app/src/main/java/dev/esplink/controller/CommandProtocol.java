@@ -7,11 +7,14 @@ public final class CommandProtocol {
     private CommandProtocol() { }
 
     public static String token(String input) {
-        String token = input.trim().toLowerCase(Locale.ROOT);
-        if (!token.matches("[0-9a-f]{12}")) {
-            throw new IllegalArgumentException("Токен — 12 hex-символов из USB Serial Monitor платы.");
+        String token = input.trim();
+        if (!token.matches("[0-9A-Za-z]*")) {
+            throw new IllegalArgumentException("В токене допустимы только латинские буквы A–Z и цифры 0–9, без пробелов внутри.");
         }
-        return token;
+        if (token.length() < 8 || token.length() > 64) {
+            throw new IllegalArgumentException("Длина токена: " + token.length() + ". Нужно от 8 до 64 символов.");
+        }
+        return token.toLowerCase(Locale.ROOT);
     }
 
     public static String command(String input) {

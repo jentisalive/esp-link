@@ -30,19 +30,21 @@ def choose_port(explicit, ports, ask=input):
     return ports[choice - 1].device
 
 
-def wait_for_firmware(connection, timeout=8):
+def wait_for_firmware(connection, timeout=8, *, probe=b"esplink:hello\n",
+                      expected=b"ESPLINK:WIFI-ONLY:1",
+                      unsupported="Wi-Fi-only firmware not detected. Flash ESP Link 1.2.0+ and retry; check the selected port."):
     deadline = time.monotonic() + timeout
     next_probe = 0.0
     while time.monotonic() < deadline:
         if time.monotonic() >= next_probe:
-            connection.write(b"esplink:hello\n")
+            connection.write(probe)
             connection.flush()
             next_probe = time.monotonic() + 0.75
         line = connection.readline().strip()
-        if line == b"ESPLINK:WIFI-ONLY:1":
+        if line == expected:
             return
         # Never echo arbitrary boot lines: they can contain the token / current password.
-    raise RuntimeError("Wi-Fi-only firmware not detected. Flash ESP Link 1.2.0+ and retry; check the selected port.")
+    raise RuntimeError(unsupported)
 
 
 def change_password(connection, password, timeout=8):
@@ -59,23 +61,27 @@ def change_password(connection, password, timeout=8):
     raise RuntimeError("No save confirmation. Password MAY have changed. Press EN and check USB Serial before retrying.")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Change ESP Link Wi-Fi password over USB without flashing.")
-    parser.add_argument("--port", help="ESP32 serial port, e.g. COM5")
-    args = parser.parse_args()
+def open_usb(port):
     if not sys.stdin.isatty():
-        raise RuntimeError("Run this interactively from change_wifi_password.bat; password input must not be redirected.")
+        raise RuntimeError("Run this interactively from the BAT file; input must not be redirected.")
     import serial
     from serial.tools import list_ports
 
-    port = choose_port(args.port, list(list_ports.comports()))
+    port = choose_port(port, list(list_ports.comports()))
     print(f"Opening {port} at 115200 baud. Close other serial monitors first.")
     print("If the board is restarting, wait. If needed, press EN once.")
     connection = serial.Serial(port=None, baudrate=115200, timeout=0.25, write_timeout=3)
     connection.dtr = False
     connection.rts = False
     connection.port = port
-    with connection:
+    return connection
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Change ESP Link Wi-Fi password over USB without flashing.")
+    parser.add_argument("--port", help="ESP32 serial port, e.g. COM5")
+    args = parser.parse_args()
+    with open_usb(args.port) as connection:
         wait_for_firmware(connection)
         print("Wi-Fi-only firmware detected. Device token will not change.")
         password = validate_password(getpass.getpass("New Wi-Fi password (hidden): "))

@@ -19,9 +19,13 @@ public class CommandProtocolTest {
     }
     @Test public void tokensAreNormalized() {
         assertEquals("abcdef123456", CommandProtocol.token(" ABCDEF123456\n"));
+        assertEquals("zetacontrol7", CommandProtocol.token("ZetaControl7"));
+        for (int length : new int[]{8, 13, 64}) {
+            assertEquals(length, CommandProtocol.token("Z".repeat(length)).length());
+        }
     }
     @Test public void invalidTokensAreRejected() {
-        for (String value : new String[]{"", "123456", "zzzzzzzzzzzz", "abcdef1234567"}) {
+        for (String value : new String[]{"", "1234567", "ZetaControl!", "ЖetaControl7", "a".repeat(65)}) {
             assertThrows(IllegalArgumentException.class, () -> CommandProtocol.token(value));
         }
     }

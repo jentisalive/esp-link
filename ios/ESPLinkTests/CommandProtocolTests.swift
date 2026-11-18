@@ -18,7 +18,11 @@ final class CommandProtocolTests: XCTestCase {
     func testTokenValidation() throws {
         let token = try CommandProtocol.token(" ABCDEF012345\n")
         XCTAssertEqual(token, "abcdef012345")
-        for text in ["", "123456", "zzzzzzzzzzzz", "123456789abcd"] {
+        XCTAssertEqual(try CommandProtocol.token("ZetaControl7"), "zetacontrol7")
+        for length in [8, 13, 64] {
+            XCTAssertEqual(try CommandProtocol.token(String(repeating: "Z", count: length)).count, length)
+        }
+        for text in ["", "1234567", "ZetaControl!", "ЖetaControl7", String(repeating: "a", count: 65)] {
             XCTAssertThrowsError(try CommandProtocol.token(text))
         }
     }

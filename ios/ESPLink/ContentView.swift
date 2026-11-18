@@ -82,7 +82,7 @@ struct ContentView: View {
             } else {
                 VStack(alignment: .leading, spacing: 7) {
                     Text("ТОКЕН УСТРОЙСТВА").font(.system(size: 10, weight: .medium, design: .monospaced)).foregroundStyle(Palette.muted)
-                    SecureField("12 символов из Serial Monitor", text: $model.token)
+                     SecureField("Токен из Serial Monitor", text: $model.token)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .font(.system(.body, design: .monospaced))
                         .padding(12).background(Palette.background, in: RoundedRectangle(cornerRadius: 10))

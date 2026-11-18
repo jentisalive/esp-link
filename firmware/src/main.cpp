@@ -105,13 +105,22 @@ void setupHTTP() {
     http.begin();
 }
 
+bool validDeviceToken(const String& token) {
+    if (token.length() < 8 || token.length() > 64) return false;
+    for (size_t i = 0; i < token.length(); ++i) {
+        const char c = token[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'))) return false;
+    }
+    return true;
+}
+
 void loadIdentity() {
     Preferences preferences;
     if (!preferences.begin("esp-link", false)) {
         Serial.println("FATAL: cannot open NVS"); while (true) delay(1000);
     }
     deviceToken = preferences.getString("token", "");
-    if (deviceToken.length() != 12) {
+    if (!validDeviceToken(deviceToken)) {
         deviceToken = randomHex(12);
         if (preferences.putString("token", deviceToken) == 0) {
             Serial.println("FATAL: cannot save token"); while (true) delay(1000);
@@ -139,20 +148,54 @@ void startAP() {
 }
 
 void printIdentity() {
-    Serial.println("\n=== ESP Link 1.2.0 / Wi-Fi ONLY ===");
+    Serial.println("\n=== ESP Link 1.2.4 / Wi-Fi ONLY ===");
     Serial.println("Device / Wi-Fi SSID: " + deviceName);
     Serial.println("Device token: " + deviceToken);
     Serial.println("Wi-Fi password: " + wifiPassword);
     Serial.println("HTTP address: http://192.168.4.1");
     Serial.println("Token and Wi-Fi password are DIFFERENT. Keep both private.");
     Serial.println("Change Wi-Fi password over USB only: change_wifi_password.bat");
+    Serial.println("Rotate device token over USB only: change_device_token.bat");
+}
+
+void saveDeviceToken(const String& next) {
+    if (next == deviceToken || next.equalsIgnoreCase(wifiPassword)) {
+        Serial.println("ESPLINK:ERROR:TOKEN-REUSED"); return;
+    }
+    if (!validDeviceToken(next)) { Serial.println("ESPLINK:ERROR:TOKEN-FORMAT"); return; }
+    Preferences preferences;
+    if (!preferences.begin("esp-link", false)) { Serial.println("ESPLINK:ERROR:NVS"); return; }
+    const size_t saved = preferences.putString("token", next);
+    preferences.end();
+    if (saved == 0) { Serial.println("ESPLINK:ERROR:NVS"); return; }
+    deviceToken = next;
+    Serial.println("ESPLINK:TOKEN-SAVED");
+}
+
+void rotateDeviceToken() {
+    String next;
+    do { next = randomHex(12); } while (next == deviceToken || next.equalsIgnoreCase(wifiPassword));
+    saveDeviceToken(next);
 }
 
 void processSerialCommand() {
+    constexpr char tokenPrefix[] = "esplink:set-token:";
     if (strcmp(serialLine, "esplink:hello") == 0) {
         Serial.println("ESPLINK:WIFI-ONLY:1");
     } else if (strcmp(serialLine, "esplink:info") == 0) {
         printIdentity();
+    } else if (strcmp(serialLine, "esplink:token-capability") == 0) {
+        Serial.println("ESPLINK:TOKEN-ROTATION:1");
+    } else if (strcmp(serialLine, "esplink:manual-token-capability") == 0) {
+        Serial.println("ESPLINK:MANUAL-TOKEN:1");
+    } else if (strcmp(serialLine, "esplink:alphanumeric-token-capability") == 0) {
+        Serial.println("ESPLINK:ALPHANUMERIC-TOKEN:2");
+    } else if (strncmp(serialLine, tokenPrefix, sizeof(tokenPrefix) - 1) == 0) {
+        String next = serialLine + sizeof(tokenPrefix) - 1;
+        next.toLowerCase();
+        saveDeviceToken(next);
+    } else if (strcmp(serialLine, "esplink:rotate-token") == 0) {
+        rotateDeviceToken();
     } else {
         constexpr char prefix[] = "esplink:wifi-password:";
         if (strncmp(serialLine, prefix, sizeof(prefix) - 1) != 0) {

@@ -113,7 +113,7 @@ public final class MainActivity extends Activity {
         add(connection, text("Только Wi-Fi · локальное управление", 14, MINT), 14);
         stateView = text("○  Не подключено", 13, MUTED);
         add(connection, stateView, 14);
-        tokenField = input("Токен: 12 символов из Serial Monitor", true);
+        tokenField = input("Токен из Serial Monitor", true);
         tokenField.setSaveEnabled(false);
         tokenField.setText(TokenStore.load(this));
         add(connection, tokenField, 14);

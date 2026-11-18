@@ -21,13 +21,16 @@ enum CommandProtocol {
     }
 
     static func token(_ value: String) throws -> String {
-        let text = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard text.count == 12, text.utf8.allSatisfy({
-            (48...57).contains($0) || (97...102).contains($0)
+        let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.utf8.allSatisfy({
+            (48...57).contains($0) || (65...90).contains($0) || (97...122).contains($0)
         }) else {
-            throw LinkError.message("Токен — 12 hex-символов из USB Serial Monitor платы.")
+            throw LinkError.message("В токене допустимы только латинские буквы A–Z и цифры 0–9, без пробелов внутри.")
         }
-        return text
+        guard (8...64).contains(text.utf8.count) else {
+            throw LinkError.message("Длина токена: \(text.utf8.count). Нужно от 8 до 64 символов.")
+        }
+        return text.lowercased()
     }
 
     // Only local IPv4 addresses and Bonjour hostnames; never send the token to a public host.

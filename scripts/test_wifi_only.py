@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 import change_wifi_password as password_tool
+import change_device_token as token_tool
 
 
 class FakeSerial:
@@ -63,6 +64,59 @@ class USBPasswordTests(unittest.TestCase):
         self.assertEqual(password_tool.choose_port("COM7", ports), "COM7")
         with self.assertRaises(ValueError):
             password_tool.choose_port(None, [])
+
+
+class USBTokenTests(unittest.TestCase):
+    PROBE = b"esplink:token-capability\n"
+    ROTATE = b"esplink:rotate-token\n"
+    SUPPORTED = b"ESPLINK:TOKEN-ROTATION:1\n"
+    MANUAL = b"ESPLINK:ALPHANUMERIC-TOKEN:2\n"
+    MANUAL_PROBE = b"esplink:alphanumeric-token-capability\n"
+
+    def test_manual_token_is_normalized_and_not_printed(self):
+        serial = FakeSerial([self.MANUAL, b"ESPLINK:TOKEN-SAVED\n"])
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertTrue(token_tool.set_token(serial, ask=lambda _: "ZetaControl7"))
+        self.assertEqual(serial.writes, [self.MANUAL_PROBE, b"esplink:set-token:zetacontrol7\n"])
+        self.assertEqual(output.getvalue(), "")
+
+    def test_manual_invalid_and_mismatched_tokens_are_not_sent(self):
+        for answers in [("abc def123456",), ("ZetaControl!",), ("ЖetaControl7",), ("abcdef123456", "abcdef123457")]:
+            serial = FakeSerial([self.MANUAL])
+            values = iter(answers)
+            with self.assertRaises(ValueError):
+                token_tool.set_token(serial, ask=lambda _: next(values))
+            self.assertEqual(serial.writes, [self.MANUAL_PROBE])
+
+    def test_token_length_boundaries(self):
+        for length in (8, 12, 13, 64):
+            self.assertEqual(token_tool.normalize_token(" Z" + "x" * (length - 1) + " "), "z" + "x" * (length - 1))
+        for length in (0, 7, 65):
+            with self.assertRaisesRegex(ValueError, f"Token length: {length}"):
+                token_tool.normalize_token("x" * length)
+
+    def test_rotation_is_sent_once_after_confirmation(self):
+        serial = FakeSerial([self.SUPPORTED, b"ESPLINK:TOKEN-SAVED\n"])
+        self.assertTrue(token_tool.rotate_token(serial, ask=lambda _: "Y"))
+        self.assertEqual(serial.writes, [self.PROBE, self.ROTATE])
+
+    def test_cancel_sends_no_rotation(self):
+        serial = FakeSerial([self.SUPPORTED])
+        self.assertFalse(token_tool.rotate_token(serial, ask=lambda _: ""))
+        self.assertEqual(serial.writes, [self.PROBE])
+
+    def test_unsupported_firmware_sends_no_rotation(self):
+        serial = FakeSerial([b"ESPLINK:ERROR:COMMAND\n"])
+        with self.assertRaisesRegex(RuntimeError, "1.2.1"):
+            token_tool.rotate_token(serial, ask=lambda _: "y", timeout=0.001)
+        self.assertEqual(serial.writes, [self.PROBE])
+
+    def test_no_retry_without_ack(self):
+        serial = FakeSerial([self.SUPPORTED])
+        with self.assertRaisesRegex(RuntimeError, "MAY have changed"):
+            token_tool.rotate_token(serial, ask=lambda _: "y", timeout=0.001)
+        self.assertEqual(serial.writes, [self.PROBE, self.ROTATE])
 
 
 class WiFiOnlySourceTests(unittest.TestCase):
