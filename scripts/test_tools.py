@@ -1,0 +1,84 @@
+"""Offline tests for source packaging and Apple export options. No credentials required."""
+
+import datetime as dt
+import hashlib
+import os
+from pathlib import Path
+import plistlib
+import tempfile
+import unittest
+from unittest.mock import patch
+import zipfile
+
+import package_source
+import signing_options
+
+
+class SourcePackageTests(unittest.TestCase):
+    def test_archive_has_workflows_but_not_secrets_or_builds(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = ["README.md", ".gitignore", ".gitattributes", ".github/workflows/build.yml",
+                     "ios/ESPLink/App.swift", "firmware/src/main.cpp", "firmware/include/secrets.h",
+                     "firmware/.pio/build/test.bin", "ios/certificate.p12", "scripts/__pycache__/test.pyc"]
+            for name in files:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("test", encoding="utf-8")
+            with patch.object(package_source, "ROOT", root):
+                package_source.main()
+            with zipfile.ZipFile(root / "dist/ESPLink-source.zip") as archive:
+                names = set(archive.namelist())
+            self.assertIn("ESPLink/.github/workflows/build.yml", names)
+            self.assertIn("ESPLink/firmware/src/main.cpp", names)
+            self.assertFalse(any("secrets.h" in name or ".p12" in name or ".pio/" in name or "__pycache__" in name for name in names))
+
+
+class SigningOptionsTests(unittest.TestCase):
+    def run_export(self, development=False, devices=False, app_id="dev.esplink.controller", expired=False):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cert = b"test-certificate-not-a-real-key"
+            profile = {
+                "UUID": "test-profile",
+                "TeamIdentifier": ["TESTTEAM01"],
+                "DeveloperCertificates": [cert],
+                "ExpirationDate": dt.datetime.now() + dt.timedelta(days=-1 if expired else 1),
+                "Entitlements": {"application-identifier": "TESTTEAM01." + app_id, "get-task-allow": development},
+            }
+            if devices:
+                profile["ProvisionedDevices"] = ["test-device"]
+            with (root / "profile.plist").open("wb") as output:
+                plistlib.dump(profile, output)
+            (root / "profile.mobileprovision").write_bytes(b"test-profile")
+            env = {"RUNNER_TEMP": str(root), "GITHUB_ENV": str(root / "env"), "BUNDLE_ID": "dev.esplink.controller"}
+            identity = hashlib.sha1(cert).hexdigest().upper()
+            with patch.dict(os.environ, env), patch.object(Path, "home", return_value=root), patch.object(
+                signing_options.subprocess, "check_output", return_value=identity
+            ):
+                signing_options.main()
+            with (root / "ExportOptions.plist").open("rb") as source:
+                return plistlib.load(source)
+
+    def test_development_export(self):
+        self.assertEqual(self.run_export(development=True, devices=True)["method"], "debugging")
+
+    def test_adhoc_export(self):
+        self.assertEqual(self.run_export(devices=True)["method"], "release-testing")
+
+    def test_appstore_export_does_not_upload(self):
+        options = self.run_export()
+        self.assertEqual(options["method"], "app-store-connect")
+        self.assertEqual(options["destination"], "export")
+
+    def test_wrong_app_id_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.run_export(app_id="dev.other.app")
+
+    def test_expired_profile_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.run_export(expired=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
