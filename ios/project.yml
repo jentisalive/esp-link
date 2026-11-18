@@ -16,13 +16,14 @@ targets:
     type: application
     platform: iOS
     sources:
-      - ESPLink
-    info:
-      path: ESPLink/Info.plist
+      - path: ESPLink
+        excludes:
+          - Info.plist
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.esplink.controller
         GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: ESPLink/Info.plist
   ESPLinkTests:
     type: bundle.unit-test
     platform: iOS

@@ -7,6 +7,7 @@ Workflow `Build and test`:
 1. Генерирует Xcode-проект из `ios/project.yml`.
 2. Выполняет XCTest в iPhone Simulator: валидация команд, токенов, локальных адресов, JSON-контракт; HTTP подключение/неверный токен/мигание/отсутствие автоматического повтора при busy через mock URLProtocol.
 3. Собирает приложение для настоящего iPhone без подписи.
+   Проверяет **Info.plist внутри IPA**: разрешения Bluetooth/локальной сети, HTTP и конфигурация запуска.
 4. На Linux запускает C++ тесты `CommandEngine`: 3 импульса, занятость, команды, последовательные job, переполнение `millis()`.
 5. Собирает firmware для `upesy_wroom`, формирует merged binary для flash с адреса `0x0`.
 

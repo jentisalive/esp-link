@@ -12,6 +12,7 @@ import zipfile
 
 import package_source
 import signing_options
+import verify_ios_package
 
 
 class SourcePackageTests(unittest.TestCase):
@@ -78,6 +79,37 @@ class SigningOptionsTests(unittest.TestCase):
     def test_expired_profile_rejected(self):
         with self.assertRaises(SystemExit):
             self.run_export(expired=True)
+
+
+class IPAMetadataTests(unittest.TestCase):
+    def source_info(self):
+        path = Path(__file__).resolve().parents[1] / "ios/ESPLink/Info.plist"
+        with path.open("rb") as source:
+            info = plistlib.load(source)
+        info["CFBundleShortVersionString"] = "1.0.0"
+        return info
+
+    def verify(self, info):
+        with tempfile.TemporaryDirectory() as directory:
+            ipa = Path(directory) / "test.ipa"
+            with zipfile.ZipFile(ipa, "w") as archive:
+                archive.writestr("Payload/ESPLink.app/Info.plist", plistlib.dumps(info))
+            return verify_ios_package.verify(ipa)
+
+    def test_source_has_required_metadata(self):
+        self.assertEqual(self.verify(self.source_info())["CFBundleDisplayName"], "ESP Link")
+
+    def test_missing_permission_is_rejected(self):
+        for key in ["NSBluetoothAlwaysUsageDescription", "NSLocalNetworkUsageDescription", "NSAppTransportSecurity"]:
+            with self.subTest(key=key):
+                info = self.source_info()
+                del info[key]
+                with self.assertRaises(ValueError):
+                    self.verify(info)
+
+    def test_overwritten_plist_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.verify({"CFBundleIdentifier": "dev.esplink.controller"})
 
 
 if __name__ == "__main__":

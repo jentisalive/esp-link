@@ -64,6 +64,8 @@ jobs:
             -archivePath build/ESPLink.xcarchive \
             -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" \
             -exportPath build/signed
+      - name: Verify exported IPA metadata
+        run: python3 scripts/verify_ios_package.py build/signed/*.ipa
       - uses: actions/upload-artifact@v4
         with:
           name: ESPLink-iOS-signed
