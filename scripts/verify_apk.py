@@ -1,0 +1,21 @@
+"""Verify installed app identity and Bluetooth permissions in the actual APK."""
+
+import subprocess
+import sys
+
+
+def verify(aapt, apk):
+    metadata = subprocess.check_output([aapt, "dump", "badging", apk], text=True)
+    for expected in ["package: name='dev.esplink.controller'", "versionName='1.1.0'",
+                     "sdkVersion:'26'", "targetSdkVersion:'35'", "launchable-activity: name='dev.esplink.controller.MainActivity'",
+                     "android.permission.BLUETOOTH_SCAN", "android.permission.BLUETOOTH_CONNECT",
+                     "android.permission.ACCESS_FINE_LOCATION", "android.permission.INTERNET"]:
+        if expected not in metadata:
+            raise ValueError(f"APK metadata missing: {expected}")
+    if "application-debuggable" in metadata:
+        raise ValueError("Release APK must not be debuggable")
+    print("Signed Android release metadata verified: ESP Link 1.1.0, Android 8+")
+
+
+if __name__ == "__main__":
+    verify(sys.argv[1], sys.argv[2])

@@ -15,3 +15,10 @@ __pycache__/
 *.mobileprovision
 .env
 firmware/include/secrets.h
+.gradle/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+.signing/

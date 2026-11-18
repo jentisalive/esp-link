@@ -1,6 +1,8 @@
 # ESP Link
 
-Локальный пульт для **uPesy ESP32 Wroom DevKit**: нативное приложение на SwiftUI для iPhone/iPad (iOS 16+) и прошивка ESP32.
+Локальный пульт для **uPesy ESP32 Wroom DevKit**: нативные приложения для iPhone/iPad (iOS 16+) и **Android 8+**, плюс прошивка ESP32.
+
+**Android:** скачайте APK из Releases и установите на телефон. Инструкции и разрешения: [ANDROID.md](docs/ANDROID.md). Прошивка платы та же, что для iOS. **get_token.bat** открывает USB-монитор для просмотра токена без перепрошивки.
 
 - **Bluetooth LE**: поиск платы в приложении, проверка токена, команды и ответы через GATT. Не Bluetooth Classic/SPP.
 - **Wi-Fi**: плата создаёт сеть `ESP32-Link-XXXX`, роутер и интернет не нужны.
@@ -55,6 +57,7 @@ HTTP address: http://192.168.4.1
 
 ```text
 ios/ESPLink/                SwiftUI, CoreBluetooth, HTTP, Keychain
+android/                   Android: Java, BLE GATT, Wi-Fi HTTP, Android Keystore
 ios/ESPLinkTests/           Тесты протокола и HTTP с mock-платой
 ios/project.yml            XcodeGen: генерация Xcode-проекта
 firmware/src/main.cpp      BLE + Wi-Fi AP + HTTP, без блокирующего delay-мигания
@@ -62,6 +65,8 @@ firmware/include/          Независимый от железа обрабо
 firmware/test/             C++ тесты: три импульса, busy, GPIO-логика, переполнение часов
 .github/workflows/         Сборки и необязательная ручная подпись
 scripts/                   Упаковка прошивки, исходников, публикация
+get_token.bat              Просмотр токена по USB, без прошивки
+flash_esp32.bat            Прошивка платы и необязательный USB-монитор
 docs/                      Подпись iOS, GitHub, протокол, проверка на железе
 ```
 

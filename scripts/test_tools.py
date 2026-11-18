@@ -13,6 +13,7 @@ import zipfile
 import package_source
 import signing_options
 import verify_ios_package
+import verify_apk
 
 
 class SourcePackageTests(unittest.TestCase):
@@ -21,7 +22,10 @@ class SourcePackageTests(unittest.TestCase):
             root = Path(directory)
             files = ["README.md", ".gitignore", ".gitattributes", ".github/workflows/build.yml",
                      "ios/ESPLink/App.swift", "firmware/src/main.cpp", "firmware/include/secrets.h",
-                     "firmware/.pio/build/test.bin", "ios/certificate.p12", "scripts/__pycache__/test.pyc"]
+                     "firmware/.pio/build/test.bin", "ios/certificate.p12", "scripts/__pycache__/test.pyc",
+                     "get_token.bat", "flash_esp32.bat", "android/app/src/Main.java", "android/local.properties",
+                     "android/.gradle/cache.bin", "android/app/build/app.apk", "android/release.keystore",
+                     ".signing/android-release-password.txt"]
             for name in files:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
@@ -32,7 +36,11 @@ class SourcePackageTests(unittest.TestCase):
                 names = set(archive.namelist())
             self.assertIn("ESPLink/.github/workflows/build.yml", names)
             self.assertIn("ESPLink/firmware/src/main.cpp", names)
+            self.assertIn("ESPLink/android/app/src/Main.java", names)
+            self.assertIn("ESPLink/get_token.bat", names)
             self.assertFalse(any("secrets.h" in name or ".p12" in name or ".pio/" in name or "__pycache__" in name for name in names))
+            self.assertFalse(any("local.properties" in name or "/.signing/" in name or "/.gradle/" in name
+                                 or name.endswith((".apk", ".keystore")) for name in names))
 
 
 class SigningOptionsTests(unittest.TestCase):
@@ -110,6 +118,33 @@ class IPAMetadataTests(unittest.TestCase):
     def test_overwritten_plist_is_rejected(self):
         with self.assertRaises(ValueError):
             self.verify({"CFBundleIdentifier": "dev.esplink.controller"})
+
+
+class APKMetadataTests(unittest.TestCase):
+    METADATA = """package: name='dev.esplink.controller' versionCode='2' versionName='1.1.0'
+sdkVersion:'26'
+targetSdkVersion:'35'
+launchable-activity: name='dev.esplink.controller.MainActivity'
+uses-permission: name='android.permission.BLUETOOTH_SCAN'
+uses-permission: name='android.permission.BLUETOOTH_CONNECT'
+uses-permission: name='android.permission.ACCESS_FINE_LOCATION'
+uses-permission: name='android.permission.INTERNET'
+"""
+
+    def test_valid_apk_metadata(self):
+        with patch.object(verify_apk.subprocess, "check_output", return_value=self.METADATA):
+            verify_apk.verify("aapt", "test.apk")
+
+    def test_missing_permission_rejected(self):
+        metadata = self.METADATA.replace("android.permission.BLUETOOTH_SCAN", "missing")
+        with patch.object(verify_apk.subprocess, "check_output", return_value=metadata):
+            with self.assertRaises(ValueError):
+                verify_apk.verify("aapt", "test.apk")
+
+    def test_debuggable_release_rejected(self):
+        with patch.object(verify_apk.subprocess, "check_output", return_value=self.METADATA + "application-debuggable"):
+            with self.assertRaises(ValueError):
+                verify_apk.verify("aapt", "test.apk")
 
 
 if __name__ == "__main__":
