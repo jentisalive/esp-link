@@ -29,7 +29,6 @@ struct ContentView: View {
         .background(Palette.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .tint(Palette.mint)
-        .onChange(of: model.transport) { _ in model.switchTransport() }
         .onChange(of: scenePhase) { phase in
             // This controller intentionally does not run commands in the background.
             if phase == .background { model.disconnect() }
@@ -64,9 +63,8 @@ struct ContentView: View {
     private var connectionCard: some View {
         VStack(alignment: .leading, spacing: 18) {
             sectionTitle("01", "Подключение", icon: "antenna.radiowaves.left.and.right")
-            Picker("Способ подключения", selection: $model.transport) {
-                ForEach(Transport.allCases) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented)
+            Label("Только Wi-Fi · локальное управление", systemImage: "wifi")
+                .font(.subheadline).foregroundStyle(Palette.mint)
 
             HStack(alignment: .top, spacing: 10) {
                 Circle().fill(model.isReady ? Palette.mint : Color.orange)
@@ -90,43 +88,9 @@ struct ContentView: View {
                         .padding(12).background(Palette.background, in: RoundedRectangle(cornerRadius: 10))
                         .accessibilityLabel("Токен ESP32")
                 }
-                if model.transport == .bluetooth {
-                    bluetoothControls
-                } else {
-                    wifiControls
-                }
+                wifiControls
             }
         }.cardStyle()
-    }
-
-    private var bluetoothControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                if model.bluetooth.isScanning { model.bluetooth.stopScan() }
-                else { model.bluetooth.scan() }
-            } label: {
-                HStack {
-                    if model.bluetooth.isScanning { ProgressView().controlSize(.small) }
-                    Image(systemName: "dot.radiowaves.left.and.right")
-                    Text(model.bluetooth.isScanning ? "Остановить поиск" : "Найти ESP32")
-                }.frame(maxWidth: .infinity).padding(.vertical, 5)
-            }.buttonStyle(.borderedProminent).foregroundStyle(Palette.background)
-            ForEach(model.bluetooth.boards) { board in
-                Button { model.connect(board: board) } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: "cpu").font(.title2).foregroundStyle(Palette.mint)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(board.name).font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                            Text("\(board.rssi) dBm · нажмите для подключения").font(.caption2).foregroundStyle(Palette.muted)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundStyle(Palette.muted)
-                    }.padding(12).background(Palette.background, in: RoundedRectangle(cornerRadius: 12))
-                }.buttonStyle(.plain)
-            }
-            Text("Сопряжение через настройки iPhone не нужно. Плата появится здесь после загрузки прошивки ESP Link.")
-                .font(.caption).foregroundStyle(Palette.muted)
-        }
     }
 
     private var wifiControls: some View {
@@ -140,7 +104,7 @@ struct ContentView: View {
                 Label("Подключиться к плате", systemImage: "wifi")
                     .frame(maxWidth: .infinity).padding(.vertical, 5)
             }.buttonStyle(.borderedProminent).foregroundStyle(Palette.background)
-            Text("1. В Настройки → Wi-Fi выберите ESP32-Link-XXXX.\n2. Пароль сети совпадает с токеном из USB Serial Monitor.\n3. Вернитесь сюда и подключитесь. Интернет не требуется.")
+            Text("1. В Настройки → Wi-Fi выберите ESP32-Link-XXXX.\n2. Введите Wi-Fi password из USB Serial Monitor — это НЕ токен.\n3. Вернитесь сюда, введите Device token и подключитесь. Интернет не требуется.\nПароль сети меняется по USB через change_wifi_password.bat.")
                 .font(.caption).foregroundStyle(Palette.muted).lineSpacing(4)
         }
     }

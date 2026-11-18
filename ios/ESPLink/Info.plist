@@ -28,8 +28,6 @@
     <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
     <key>UISupportedInterfaceOrientations~ipad</key>
     <array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
-    <key>NSBluetoothAlwaysUsageDescription</key>
-    <string>Подключение к ESP32 и отправка команд светодиоду по Bluetooth LE.</string>
     <key>NSLocalNetworkUsageDescription</key>
     <string>Подключение к вашей ESP32 по локальному Wi-Fi для отправки команд.</string>
     <key>NSAppTransportSecurity</key>

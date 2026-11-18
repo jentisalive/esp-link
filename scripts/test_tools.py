@@ -23,7 +23,7 @@ class SourcePackageTests(unittest.TestCase):
             files = ["README.md", ".gitignore", ".gitattributes", ".github/workflows/build.yml",
                      "ios/ESPLink/App.swift", "firmware/src/main.cpp", "firmware/include/secrets.h",
                      "firmware/.pio/build/test.bin", "ios/certificate.p12", "scripts/__pycache__/test.pyc",
-                     "get_token.bat", "flash_esp32.bat", "android/app/src/Main.java", "android/local.properties",
+                     "get_token.bat", "flash_esp32.bat", "change_wifi_password.bat", "android/app/src/Main.java", "android/local.properties",
                      "android/.gradle/cache.bin", "android/app/build/app.apk", "android/release.keystore",
                      ".signing/android-release-password.txt"]
             for name in files:
@@ -38,6 +38,7 @@ class SourcePackageTests(unittest.TestCase):
             self.assertIn("ESPLink/firmware/src/main.cpp", names)
             self.assertIn("ESPLink/android/app/src/Main.java", names)
             self.assertIn("ESPLink/get_token.bat", names)
+            self.assertIn("ESPLink/change_wifi_password.bat", names)
             self.assertFalse(any("secrets.h" in name or ".p12" in name or ".pio/" in name or "__pycache__" in name for name in names))
             self.assertFalse(any("local.properties" in name or "/.signing/" in name or "/.gradle/" in name
                                  or name.endswith((".apk", ".keystore")) for name in names))
@@ -94,7 +95,7 @@ class IPAMetadataTests(unittest.TestCase):
         path = Path(__file__).resolve().parents[1] / "ios/ESPLink/Info.plist"
         with path.open("rb") as source:
             info = plistlib.load(source)
-        info["CFBundleShortVersionString"] = "1.0.0"
+        info["CFBundleShortVersionString"] = "1.2.0"
         return info
 
     def verify(self, info):
@@ -108,7 +109,7 @@ class IPAMetadataTests(unittest.TestCase):
         self.assertEqual(self.verify(self.source_info())["CFBundleDisplayName"], "ESP Link")
 
     def test_missing_permission_is_rejected(self):
-        for key in ["NSBluetoothAlwaysUsageDescription", "NSLocalNetworkUsageDescription", "NSAppTransportSecurity"]:
+        for key in ["NSLocalNetworkUsageDescription", "NSAppTransportSecurity"]:
             with self.subTest(key=key):
                 info = self.source_info()
                 del info[key]
@@ -119,16 +120,20 @@ class IPAMetadataTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.verify({"CFBundleIdentifier": "dev.esplink.controller"})
 
+    def test_bluetooth_permission_is_rejected(self):
+        info = self.source_info()
+        info["NSBluetoothAlwaysUsageDescription"] = "Unexpected access"
+        with self.assertRaises(ValueError):
+            self.verify(info)
+
 
 class APKMetadataTests(unittest.TestCase):
-    METADATA = """package: name='dev.esplink.controller' versionCode='2' versionName='1.1.0'
+    METADATA = """package: name='dev.esplink.controller' versionCode='3' versionName='1.2.0'
 sdkVersion:'26'
 targetSdkVersion:'35'
 launchable-activity: name='dev.esplink.controller.MainActivity'
-uses-permission: name='android.permission.BLUETOOTH_SCAN'
-uses-permission: name='android.permission.BLUETOOTH_CONNECT'
-uses-permission: name='android.permission.ACCESS_FINE_LOCATION'
 uses-permission: name='android.permission.INTERNET'
+uses-permission: name='android.permission.ACCESS_NETWORK_STATE'
 """
 
     def test_valid_apk_metadata(self):
@@ -136,13 +141,18 @@ uses-permission: name='android.permission.INTERNET'
             verify_apk.verify("aapt", "test.apk")
 
     def test_missing_permission_rejected(self):
-        metadata = self.METADATA.replace("android.permission.BLUETOOTH_SCAN", "missing")
+        metadata = self.METADATA.replace("android.permission.INTERNET", "missing")
         with patch.object(verify_apk.subprocess, "check_output", return_value=metadata):
             with self.assertRaises(ValueError):
                 verify_apk.verify("aapt", "test.apk")
 
     def test_debuggable_release_rejected(self):
         with patch.object(verify_apk.subprocess, "check_output", return_value=self.METADATA + "application-debuggable"):
+            with self.assertRaises(ValueError):
+                verify_apk.verify("aapt", "test.apk")
+
+    def test_bluetooth_permission_rejected(self):
+        with patch.object(verify_apk.subprocess, "check_output", return_value=self.METADATA + "android.permission.BLUETOOTH_SCAN"):
             with self.assertRaises(ValueError):
                 verify_apk.verify("aapt", "test.apk")
 

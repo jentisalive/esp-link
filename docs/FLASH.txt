@@ -9,8 +9,10 @@ Only use it with a classic ESP32 WROOM / uPesy Wroom DevKit, not C3/S3/S2.
 2. Connect the board with a USB data cable. Replace COM5 with its real port:
    python -m esptool --chip esp32 --port COM5 --baud 460800 write_flash 0x0 ESPLink-upesy-wroom.bin
 3. Open Arduino IDE Serial Monitor at 115200 baud, press RESET.
-4. Read "Device token / Wi-Fi password". Enter it in the iOS app.
-5. BLE: Find ESP32 in the app. Wi-Fi: join ESP32-Link-XXXX first, address 192.168.4.1.
+4. Read "Device token" and the separate "Wi-Fi password". Keep both private.
+5. Join ESP32-Link-XXXX using Wi-Fi password. In ESP Link use Device token, address 192.168.4.1.
+6. Wi-Fi-only firmware 1.2.0 disables Bluetooth. Updating the app alone does NOT disable old board firmware.
+7. Change the Wi-Fi password over USB with change_wifi_password.bat. Token remains unchanged.
 
 If upload cannot connect, hold BOOT while connecting, then release it once flashing starts.
 If flashing is unstable, use --baud 115200.

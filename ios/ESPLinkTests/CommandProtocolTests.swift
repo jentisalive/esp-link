@@ -10,15 +10,14 @@ final class CommandProtocolTests: XCTestCase {
     }
 
     func testInvalidCommands() {
-        for text in ["", "   ", "мигни", "on\noff", "auth:123456789abc", String(repeating: "x", count: 21)] {
+        for text in ["", "   ", "мигни", "on\noff", String(repeating: "x", count: 21)] {
             XCTAssertThrowsError(try CommandProtocol.command(text), text)
         }
     }
 
-    func testTokenAndBLEFrameFitDefaultMTU() throws {
+    func testTokenValidation() throws {
         let token = try CommandProtocol.token(" ABCDEF012345\n")
         XCTAssertEqual(token, "abcdef012345")
-        XCTAssertLessThanOrEqual("auth:\(token)".utf8.count, 20)
         for text in ["", "123456", "zzzzzzzzzzzz", "123456789abcd"] {
             XCTAssertThrowsError(try CommandProtocol.token(text))
         }

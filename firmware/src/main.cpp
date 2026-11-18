@@ -1,16 +1,12 @@
 #include <Arduino.h>
-#include <BLE2902.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
 #include <esp_system.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/queue.h>
-#include <atomic>
+#include <esp_bt.h>
+#include <esp32-hal-bt.h>
 #include "CommandEngine.h"
+#include "PasswordPolicy.h"
 
 #ifndef LED_PIN
 #define LED_PIN 2
@@ -20,67 +16,28 @@
 #endif
 
 namespace {
-constexpr char SERVICE_UUID[] = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
-constexpr char RX_UUID[] = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E";
-constexpr char TX_UUID[] = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";
-constexpr size_t MAX_FRAME = 20;
-
+constexpr size_t MAX_COMMAND = 20;
 WebServer http(80);
 CommandEngine engine;
-BLECharacteristic* tx = nullptr;
 String deviceName;
 String deviceToken;
-QueueHandle_t bleQueue = nullptr;
+String wifiPassword;
+bool restartAP = false;
+char serialLine[96]{};
+size_t serialLength = 0;
+bool discardSerialLine = false;
+uint32_t serialLastByte = 0;
 
-// BLE callbacks run in another task. Only immutable credentials and atomics cross tasks.
-std::atomic<uint32_t> bleEpoch{0};
-std::atomic<bool> bleConnected{false};
-std::atomic<bool> restartAdvertising{false};
-uint32_t authenticatedEpoch = 0;  // Accessed only by loop().
-uint32_t blinkRecipientEpoch = 0;
-
-struct BLEFrame {
-    uint32_t epoch;
-    char text[MAX_FRAME + 1];
-};
-
-bool authenticated() {
-    return bleConnected.load() && authenticatedEpoch != 0 && authenticatedEpoch == bleEpoch.load();
+String randomHex(size_t length) {
+    String result;
+    result.reserve(length);
+    while (result.length() < length) {
+        char block[9];
+        snprintf(block, sizeof(block), "%08lx", static_cast<unsigned long>(esp_random()));
+        result += block;
+    }
+    return result.substring(0, length);
 }
-
-void notify(const char* reply, uint32_t epoch) {
-    if (!bleConnected.load() || epoch != bleEpoch.load()) return;
-    tx->setValue(reinterpret_cast<uint8_t*>(const_cast<char*>(reply)), std::strlen(reply));
-    tx->notify();
-}
-
-class ServerCallbacks final : public BLEServerCallbacks {
-    void onConnect(BLEServer*) override {
-        bleEpoch.fetch_add(1);
-        bleConnected.store(true);
-    }
-    void onDisconnect(BLEServer*) override {
-        bleConnected.store(false);
-        bleEpoch.fetch_add(1);
-        restartAdvertising.store(true);
-    }
-};
-
-class CommandCallbacks final : public BLECharacteristicCallbacks {
-    void onWrite(BLECharacteristic* characteristic) override {
-        const std::string value = characteristic->getValue();
-        if (value.empty() || value.size() > MAX_FRAME) return;
-        for (unsigned char c : value) if (c < 32 || c > 126) return;
-        BLEFrame frame{};
-        frame.epoch = bleEpoch.load();
-        std::memcpy(frame.text, value.data(), value.size());
-        // A saturated queue drops writes. The app reports a timeout and never retries automatically.
-        xQueueSend(bleQueue, &frame, 0);
-    }
-};
-
-ServerCallbacks serverCallbacks;
-CommandCallbacks commandCallbacks;
 
 const char* replyFor(CommandEngine::Reply reply) {
     switch (reply) {
@@ -96,30 +53,15 @@ const char* replyFor(CommandEngine::Reply reply) {
     return "error:command";
 }
 
-void processBLE() {
-    BLEFrame frame{};
-    // Bound the work per iteration so HTTP and LED timing remain responsive.
-    for (int i = 0; i < 4 && xQueueReceive(bleQueue, &frame, 0) == pdTRUE; ++i) {
-        if (!bleConnected.load() || frame.epoch != bleEpoch.load()) continue;
-        if (std::strncmp(frame.text, "auth:", 5) == 0) {
-            if (deviceToken == frame.text + 5) {
-                authenticatedEpoch = frame.epoch;
-                notify("ready", frame.epoch);
-            } else {
-                authenticatedEpoch = 0;
-                notify("error:auth", frame.epoch);
-            }
-            continue;
-        }
-        if (!authenticated()) { notify("error:auth", frame.epoch); continue; }
-        const auto result = engine.execute(frame.text, millis());
-        if (result == CommandEngine::Reply::Accepted) blinkRecipientEpoch = frame.epoch;
-        notify(replyFor(result), frame.epoch);
-    }
-}
-
+// This is an application token, separate from the WPA2 password. No credentials in URLs.
 bool authorizeHTTP() {
-    if (http.header("X-Device-Token") == deviceToken) return true;
+    const String supplied = http.header("X-Device-Token");
+    uint8_t difference = supplied.length() == deviceToken.length() ? 0 : 1;
+    for (size_t i = 0; i < deviceToken.length(); ++i) {
+        const uint8_t value = i < supplied.length() ? supplied[i] : 0;
+        difference |= value ^ static_cast<uint8_t>(deviceToken[i]);
+    }
+    if (difference == 0) return true;
     http.send(401, "application/json", "{\"reply\":\"error:auth\"}");
     return false;
 }
@@ -129,7 +71,7 @@ void setupHTTP() {
     http.collectHeaders(headers, 1);
     http.on("/api/status", HTTP_GET, [] {
         if (!authorizeHTTP()) return;
-        String json = "{\"name\":\"" + deviceName + "\",\"protocolVersion\":1,\"busy\":";
+        String json = "{\"name\":\"" + deviceName + "\",\"protocolVersion\":1,\"transport\":\"wifi-only\",\"busy\":";
         json += engine.busy() ? "true" : "false";
         json += ",\"led\":";
         json += engine.led() ? "true" : "false";
@@ -140,19 +82,17 @@ void setupHTTP() {
     http.on("/api/command", HTTP_POST, [] {
         if (!authorizeHTTP()) return;
         String command = http.arg("plain");
-        if (command.length() == 0 || command.length() > MAX_FRAME) {
-            http.send(400, "application/json", "{\"reply\":\"error:command\"}");
-            return;
+        if (command.length() == 0 || command.length() > MAX_COMMAND) {
+            http.send(400, "application/json", "{\"reply\":\"error:command\"}"); return;
         }
         for (size_t i = 0; i < command.length(); ++i) {
             if (command[i] < 32 || command[i] > 126) {
-                http.send(400, "application/json", "{\"reply\":\"error:command\"}");
-                return;
+                http.send(400, "application/json", "{\"reply\":\"error:command\"}"); return;
             }
         }
         const auto result = engine.execute(command.c_str(), millis());
         int code = 200;
-        if (result == CommandEngine::Reply::Accepted) { code = 202; blinkRecipientEpoch = 0; }
+        if (result == CommandEngine::Reply::Accepted) code = 202;
         if (result == CommandEngine::Reply::Busy) code = 409;
         if (result == CommandEngine::Reply::Unknown) code = 400;
         String json = String("{\"reply\":\"") + replyFor(result) + "\"";
@@ -167,21 +107,94 @@ void setupHTTP() {
 
 void loadIdentity() {
     Preferences preferences;
-    preferences.begin("esp-link", false);
+    if (!preferences.begin("esp-link", false)) {
+        Serial.println("FATAL: cannot open NVS"); while (true) delay(1000);
+    }
     deviceToken = preferences.getString("token", "");
     if (deviceToken.length() != 12) {
-        char token[13];
-        const uint64_t random = (static_cast<uint64_t>(esp_random()) << 32) | esp_random();
-        snprintf(token, sizeof(token), "%012llx", static_cast<unsigned long long>(random & 0xFFFFFFFFFFFFULL));
-        deviceToken = token;
+        deviceToken = randomHex(12);
         if (preferences.putString("token", deviceToken) == 0) {
-            Serial.println("WARNING: token was not saved to NVS.");
+            Serial.println("FATAL: cannot save token"); while (true) delay(1000);
+        }
+    }
+    wifiPassword = preferences.getString("wifi-pass", "");
+    if (!validWifiPassword(wifiPassword.c_str())) {
+        // New and upgraded boards receive an independent random WPA2 password.
+        wifiPassword = randomHex(20);
+        if (preferences.putString("wifi-pass", wifiPassword) == 0) {
+            Serial.println("FATAL: cannot save Wi-Fi password"); while (true) delay(1000);
         }
     }
     preferences.end();
     char suffix[5];
     snprintf(suffix, sizeof(suffix), "%04X", static_cast<unsigned>(ESP.getEfuseMac() & 0xFFFF));
     deviceName = String("ESP32-Link-") + suffix;
+}
+
+void startAP() {
+    WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+    // One connected station: this controller is intended for one robot operator.
+    const bool ok = WiFi.softAP(deviceName.c_str(), wifiPassword.c_str(), 1, false, 1);
+    Serial.println(ok ? "Wi-Fi AP ready. Bluetooth controller: OFF." : "ERROR: Wi-Fi AP failed.");
+}
+
+void printIdentity() {
+    Serial.println("\n=== ESP Link 1.2.0 / Wi-Fi ONLY ===");
+    Serial.println("Device / Wi-Fi SSID: " + deviceName);
+    Serial.println("Device token: " + deviceToken);
+    Serial.println("Wi-Fi password: " + wifiPassword);
+    Serial.println("HTTP address: http://192.168.4.1");
+    Serial.println("Token and Wi-Fi password are DIFFERENT. Keep both private.");
+    Serial.println("Change Wi-Fi password over USB only: change_wifi_password.bat");
+}
+
+void processSerialCommand() {
+    if (strcmp(serialLine, "esplink:hello") == 0) {
+        Serial.println("ESPLINK:WIFI-ONLY:1");
+    } else if (strcmp(serialLine, "esplink:info") == 0) {
+        printIdentity();
+    } else {
+        constexpr char prefix[] = "esplink:wifi-password:";
+        if (strncmp(serialLine, prefix, sizeof(prefix) - 1) != 0) {
+            Serial.println("ESPLINK:ERROR:COMMAND"); return;
+        }
+        const char* password = serialLine + sizeof(prefix) - 1;
+        if (!validWifiPassword(password)) { Serial.println("ESPLINK:ERROR:PASSWORD"); return; }
+        Preferences preferences;
+        if (!preferences.begin("esp-link", false)) { Serial.println("ESPLINK:ERROR:NVS"); return; }
+        const size_t saved = preferences.putString("wifi-pass", password);
+        preferences.end();
+        if (saved == 0) { Serial.println("ESPLINK:ERROR:NVS"); return; }
+        wifiPassword = password;
+        // Never echo the submitted password. It is not accepted through any HTTP endpoint.
+        Serial.println("ESPLINK:PASSWORD-SAVED");
+        Serial.flush();
+        restartAP = true;
+    }
+}
+
+void processSerial() {
+    if (serialLength && static_cast<uint32_t>(millis() - serialLastByte) > 2000) {
+        memset(serialLine, 0, sizeof(serialLine));
+        serialLength = 0;
+        discardSerialLine = true;  // Ignore the tail of a timed-out frame until its newline.
+    }
+    for (int i = 0; i < 128 && Serial.available(); ++i) {
+        const char value = static_cast<char>(Serial.read());
+        serialLastByte = millis();
+        if (value == '\r') continue;
+        if (value == '\n') {
+            if (discardSerialLine) Serial.println("ESPLINK:ERROR:FRAME");
+            else if (serialLength) { serialLine[serialLength] = '\0'; processSerialCommand(); }
+            memset(serialLine, 0, sizeof(serialLine));
+            serialLength = 0;
+            discardSerialLine = false;
+        } else if (!discardSerialLine) {
+            if (value < 32 || value > 126 || serialLength >= sizeof(serialLine) - 1) {
+                memset(serialLine, 0, sizeof(serialLine)); serialLength = 0; discardSerialLine = true;
+            } else serialLine[serialLength++] = value;
+        }
+    }
 }
 
 void writeLED() {
@@ -193,52 +206,30 @@ void setup() {
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
     writeLED();
-    bleQueue = xQueueCreate(8, sizeof(BLEFrame));
-    if (!bleQueue) { Serial.println("FATAL: cannot create BLE queue"); while (true) delay(1000); }
+    // No Bluetooth stack, services, advertising, scanning or connections are initialized.
+    if (!btStop() || esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_IDLE) {
+        Serial.println("FATAL: Bluetooth controller could not be disabled"); while (true) delay(1000);
+    }
+    esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
+    WiFi.persistent(false);  // AP credentials live only in our explicit NVS settings.
     WiFi.mode(WIFI_AP);
     loadIdentity();
-    WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-    const bool wifiOK = WiFi.softAP(deviceName.c_str(), deviceToken.c_str(), 1, false, 2);
+    startAP();
     setupHTTP();
-
-    BLEDevice::init(deviceName.c_str());
-    BLEServer* server = BLEDevice::createServer();
-    server->setCallbacks(&serverCallbacks);
-    BLEService* service = server->createService(SERVICE_UUID);
-    BLECharacteristic* rx = service->createCharacteristic(RX_UUID, BLECharacteristic::PROPERTY_WRITE);
-    rx->setCallbacks(&commandCallbacks);
-    tx = service->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-    tx->addDescriptor(new BLE2902());
-    service->start();
-    BLEAdvertising* advertising = BLEDevice::getAdvertising();
-    advertising->addServiceUUID(SERVICE_UUID);
-    advertising->setScanResponse(true);
-    advertising->setMinPreferred(0x06);
-    advertising->setMinPreferred(0x12);
-    BLEDevice::startAdvertising();
-
-    Serial.println("\n=== ESP Link / uPesy ESP32 Wroom DevKit ===");
-    Serial.println("Device / Wi-Fi SSID: " + deviceName);
-    Serial.println("Device token / Wi-Fi password: " + deviceToken);
-    Serial.println("HTTP address: http://" + WiFi.softAPIP().toString());
-    Serial.println(wifiOK ? "Wi-Fi AP ready. BLE ready." : "WARNING: Wi-Fi AP failed. BLE ready.");
-    Serial.printf("LED: GPIO %d. Commands: 1, on, off, status, ping\n", LED_PIN);
-    Serial.println("Keep the token private. USB Serial prints it again after RESET.");
+    printIdentity();
 }
 
 void loop() {
-    if (restartAdvertising.exchange(false)) {
-        authenticatedEpoch = 0;
-        BLEDevice::startAdvertising();
+    processSerial();
+    if (restartAP) {
+        restartAP = false;
+        http.stop();
+        WiFi.softAPdisconnect(false);
+        startAP();
+        http.begin();
     }
-    processBLE();
     http.handleClient();
-    if (engine.tick(millis())) {
-        if (blinkRecipientEpoch != 0 && authenticated() && blinkRecipientEpoch == bleEpoch.load()) {
-            notify("done:1", blinkRecipientEpoch);
-        }
-        blinkRecipientEpoch = 0;
-    }
+    engine.tick(millis());
     writeLED();
     delay(1);
 }

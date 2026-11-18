@@ -1,7 +1,6 @@
 package dev.esplink.controller;
 
 import org.junit.Test;
-import java.nio.charset.StandardCharsets;
 import static org.junit.Assert.*;
 
 public class CommandProtocolTest {
@@ -10,12 +9,11 @@ public class CommandProtocolTest {
             assertEquals(command, CommandProtocol.command(" " + command + "\n"));
         }
     }
-    @Test public void commandLimitMatchesDefaultBleMtu() {
+    @Test public void commandLimitMatchesFirmware() {
         assertEquals(20, CommandProtocol.command("12345678901234567890").length());
-        assertTrue(("auth:" + CommandProtocol.token("abcdef123456")).getBytes(StandardCharsets.US_ASCII).length <= 20);
     }
     @Test public void invalidCommandsAreRejected() {
-        for (String value : new String[]{"", "  ", "мигни", "on\noff", "auth:abcdef123456", "123456789012345678901"}) {
+        for (String value : new String[]{"", "  ", "мигни", "on\noff", "123456789012345678901"}) {
             assertThrows(value, IllegalArgumentException.class, () -> CommandProtocol.command(value));
         }
     }

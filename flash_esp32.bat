@@ -45,8 +45,9 @@ goto done
 echo.
 echo Serial Monitor: 115200 baud.
 echo Press RESET / EN on the board after the monitor opens.
-echo Look for: Device token / Wi-Fi password
-echo Keep this token private. Enter it in the ESP Link iOS app.
+echo Look for: Device token and Wi-Fi password (separate lines).
+echo Use the token in ESP Link and the Wi-Fi password in phone settings.
+echo Keep both private. Bluetooth is disabled in this firmware.
 echo Press Ctrl+C to close the monitor.
 echo.
 if defined PORT (
@@ -85,6 +86,6 @@ exit /b 1
 
 :done
 echo.
-echo Done. Open ESP Link on iPhone and connect using your device token.
+echo Done. Join the board Wi-Fi, then open ESP Link and enter your device token.
 pause
 exit /b 0

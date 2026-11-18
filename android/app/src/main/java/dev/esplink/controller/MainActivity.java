@@ -1,14 +1,10 @@
 package dev.esplink.controller;
 
-import android.Manifest;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -36,29 +32,21 @@ public final class MainActivity extends Activity {
     private static final int CARD = Color.rgb(18, 24, 31);
     private static final int MINT = Color.rgb(120, 245, 189);
     private static final int MUTED = Color.rgb(155, 173, 186);
-    private static final int PERMISSIONS = 10;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final List<String> logs = new ArrayList<>();
     private final List<Button> commandButtons = new ArrayList<>();
-    private BluetoothLink bluetooth;
     private WiFiLink wifi;
-    private boolean bluetoothMode = true;
     private boolean ready;
     private boolean connecting;
     private boolean sending;
     private String pendingCommand;
     private TextView stateView;
     private TextView logView;
-    private Button bluetoothTab;
-    private Button wifiTab;
-    private Button scanButton;
     private Button connectButton;
     private Button disconnectButton;
     private EditText tokenField;
     private EditText hostField;
     private EditText commandField;
-    private LinearLayout boardList;
-    private TextView wifiHelp;
     private final Runnable replyTimeout = () -> {
         finishSending();
         showError("Нет подтверждения от платы. Команда могла выполниться; автоматического повтора нет.");
@@ -66,16 +54,15 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        bluetooth = new BluetoothLink(this, listener(true), this::showBoards);
-        wifi = new WiFiLink(this, listener(false));
+        wifi = new WiFiLink(this, listener());
         buildInterface();
         render();
     }
 
-    private LinkListener listener(boolean isBluetooth) {
+    private LinkListener listener() {
         return new LinkListener() {
             @Override public void onState(String message, boolean connected, boolean busyConnecting) {
-                if (bluetoothMode != isBluetooth || stateView == null) return;
+                if (stateView == null) return;
                 ready = connected;
                 connecting = busyConnecting;
                 if (!ready && !connecting) finishSending();
@@ -85,14 +72,12 @@ public final class MainActivity extends Activity {
             }
 
             @Override public void onReply(String reply) {
-                if (bluetoothMode != isBluetooth) return;
                 log("← " + CommandProtocol.explain(reply));
                 if (sending && (reply.startsWith("error:") || ("1".equals(pendingCommand)
                         ? reply.equals("done:1") : !reply.equals("accepted:1")))) finishSending();
             }
 
             @Override public void onError(String message) {
-                if (bluetoothMode != isBluetooth) return;
                 finishSending();
                 showError(message);
             }
@@ -125,12 +110,7 @@ public final class MainActivity extends Activity {
         add(page, text("Твоя плата. Твои команды.", 15, MUTED), 0);
 
         LinearLayout connection = card(page, "01  Подключение");
-        LinearLayout tabs = row();
-        bluetoothTab = button("Bluetooth", () -> selectMode(true), false);
-        wifiTab = button("Wi-Fi", () -> selectMode(false), false);
-        weighted(tabs, bluetoothTab);
-        weighted(tabs, wifiTab);
-        add(connection, tabs, 14);
+        add(connection, text("Только Wi-Fi · локальное управление", 14, MINT), 14);
         stateView = text("○  Не подключено", 13, MUTED);
         add(connection, stateView, 14);
         tokenField = input("Токен: 12 символов из Serial Monitor", true);
@@ -140,19 +120,15 @@ public final class MainActivity extends Activity {
         hostField = input("192.168.4.1", false);
         hostField.setText(getPreferences(MODE_PRIVATE).getString("host", "192.168.4.1"));
         add(connection, hostField, 12);
-        scanButton = button("Найти ESP32", this::requestScan, true);
-        add(connection, scanButton, 12);
         connectButton = button("Подключиться по Wi-Fi", this::connectWifi, true);
         add(connection, connectButton, 12);
         disconnectButton = button("Отключиться", this::disconnect, false);
         add(connection, disconnectButton, 12);
-        boardList = column();
-        add(connection, boardList, 6);
-        wifiHelp = text("В настройках телефона подключитесь к ESP32-Link-XXXX. Пароль сети — токен платы. "
-                + "Останьтесь в сети без интернета, затем вернитесь сюда. Адрес: 192.168.4.1.", 12, MUTED);
+        TextView wifiHelp = text("В настройках телефона подключитесь к ESP32-Link-XXXX. Введите Wi-Fi password из USB Serial Monitor — это НЕ токен. "
+                + "Затем вернитесь сюда и введите Device token. Адрес: 192.168.4.1. "
+                + "Пароль сети меняется по USB через change_wifi_password.bat.", 12, MUTED);
         add(connection, wifiHelp, 12);
-        Button settings = button("Открыть настройки подключения", () -> startActivity(new Intent(
-                bluetoothMode ? Settings.ACTION_BLUETOOTH_SETTINGS : Settings.ACTION_WIFI_SETTINGS)), false);
+        Button settings = button("Открыть настройки Wi-Fi", () -> startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS)), false);
         add(connection, settings, 10);
 
         LinearLayout commands = card(page, "02  Команды");
@@ -193,82 +169,18 @@ public final class MainActivity extends Activity {
         add(page, footer, 24);
     }
 
-    private void selectMode(boolean useBluetooth) {
-        disconnect();
-        bluetoothMode = useBluetooth;
-        ready = false;
-        connecting = false;
-        stateView.setText("○  Не подключено");
-        boardList.removeAllViews();
-        render();
-    }
-
     private void render() {
-        if (scanButton == null) return;
+        if (connectButton == null || commandField == null) return;
         boolean idle = !ready && !connecting;
-        bluetoothTab.setTextColor(bluetoothMode ? MINT : MUTED);
-        wifiTab.setTextColor(bluetoothMode ? MUTED : MINT);
         tokenField.setVisibility(idle ? View.VISIBLE : View.GONE);
-        hostField.setVisibility(!bluetoothMode && idle ? View.VISIBLE : View.GONE);
-        scanButton.setVisibility(bluetoothMode && idle ? View.VISIBLE : View.GONE);
-        scanButton.setText(bluetooth.isScanning() ? "Остановить поиск" : "Найти ESP32");
-        connectButton.setVisibility(!bluetoothMode && idle ? View.VISIBLE : View.GONE);
+        hostField.setVisibility(idle ? View.VISIBLE : View.GONE);
+        connectButton.setVisibility(idle ? View.VISIBLE : View.GONE);
         disconnectButton.setVisibility(ready || connecting ? View.VISIBLE : View.GONE);
-        boardList.setVisibility(bluetoothMode && idle ? View.VISIBLE : View.GONE);
-        wifiHelp.setVisibility(!bluetoothMode && idle ? View.VISIBLE : View.GONE);
         for (Button button : commandButtons) {
             button.setEnabled(ready && !sending);
             button.setAlpha(ready && !sending ? 1f : 0.4f);
         }
         commandField.setEnabled(ready && !sending);
-    }
-
-    private void requestScan() {
-        if (bluetooth.isScanning()) { bluetooth.stopScan(); render(); return; }
-        List<String> missing = new ArrayList<>();
-        String[] needed = Build.VERSION.SDK_INT >= 31
-                ? new String[]{Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT}
-                : new String[]{Manifest.permission.ACCESS_FINE_LOCATION};
-        for (String permission : needed) {
-            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) missing.add(permission);
-        }
-        if (!missing.isEmpty()) { requestPermissions(missing.toArray(new String[0]), PERMISSIONS); return; }
-        if (Build.VERSION.SDK_INT <= 30) {
-            LocationManager location = getSystemService(LocationManager.class);
-            boolean enabled = location != null && (Build.VERSION.SDK_INT >= 28 ? location.isLocationEnabled()
-                    : location.isProviderEnabled(LocationManager.GPS_PROVIDER) || location.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
-            if (!enabled) {
-                new AlertDialog.Builder(this).setTitle("Поиск BLE на Android 8–11")
-                        .setMessage("В этих версиях Android поиск BLE требует включённой геолокации. Приложение не получает координаты и никуда их не отправляет.")
-                        .setPositiveButton("Настройки", (dialog, which) -> startActivity(new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)))
-                        .setNegativeButton("Отмена", null).show();
-                return;
-            }
-        }
-        bluetooth.scan();
-        render();
-    }
-
-    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-        super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode != PERMISSIONS) return;
-        for (int result : results) {
-            if (result != PackageManager.PERMISSION_GRANTED) {
-                showError("Для поиска платы разрешите доступ к устройствам поблизости / геолокации в настройках приложения."); return;
-            }
-        }
-        if (results.length > 0) requestScan();
-    }
-
-    private void showBoards(List<BluetoothLink.Board> boards) {
-        if (!bluetoothMode || boardList == null) return;
-        boardList.removeAllViews();
-        for (BluetoothLink.Board board : boards) {
-            Button button = button(board.name + "  ·  " + board.rssi + " dBm  →", () -> {
-                try { bluetooth.connect(board, saveToken()); } catch (Exception error) { showError(error.getMessage()); }
-            }, false);
-            add(boardList, button, 8);
-        }
     }
 
     private String saveToken() throws Exception {
@@ -296,8 +208,8 @@ public final class MainActivity extends Activity {
             pendingCommand = command;
             log("→ " + command);
             render();
-            if (bluetoothMode) bluetooth.send(command); else wifi.send(command);
-            main.postDelayed(replyTimeout, bluetoothMode ? 8000 : 18_000);
+            wifi.send(command);
+            main.postDelayed(replyTimeout, 18_000);
         } catch (RuntimeException error) { finishSending(); showError(error.getMessage()); }
     }
 
@@ -310,7 +222,6 @@ public final class MainActivity extends Activity {
 
     private void disconnect() {
         finishSending();
-        bluetooth.disconnect();
         wifi.disconnect();
     }
 
@@ -334,7 +245,6 @@ public final class MainActivity extends Activity {
 
     @Override protected void onDestroy() {
         main.removeCallbacksAndMessages(null);
-        bluetooth.disconnect();
         wifi.close();
         super.onDestroy();
     }

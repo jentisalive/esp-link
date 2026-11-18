@@ -2,14 +2,8 @@ package dev.esplink.controller;
 
 import java.net.URI;
 import java.util.Locale;
-import java.util.UUID;
 
 public final class CommandProtocol {
-    public static final UUID SERVICE = UUID.fromString("6E400001-B5A3-F393-E0A9-E50E24DCCA9E");
-    public static final UUID RX = UUID.fromString("6E400002-B5A3-F393-E0A9-E50E24DCCA9E");
-    public static final UUID TX = UUID.fromString("6E400003-B5A3-F393-E0A9-E50E24DCCA9E");
-    public static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
-
     private CommandProtocol() { }
 
     public static String token(String input) {
@@ -22,7 +16,7 @@ public final class CommandProtocol {
 
     public static String command(String input) {
         String command = input.trim();
-        if (!command.matches("[\\x20-\\x7e]{1,20}") || command.startsWith("auth:")) {
+        if (!command.matches("[\\x20-\\x7e]{1,20}")) {
             throw new IllegalArgumentException("Команда: 1–20 печатных ASCII-символов. Например: 1, on, off, status, ping.");
         }
         return command;

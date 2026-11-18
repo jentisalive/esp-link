@@ -11,15 +11,10 @@ enum LinkError: LocalizedError {
 }
 
 enum CommandProtocol {
-    static let service = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
-    static let rx = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
-    static let tx = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
-
     static func command(_ value: String) throws -> String {
         let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.utf8.count <= 20,
-              text.utf8.allSatisfy({ (32...126).contains($0) }),
-              !text.hasPrefix("auth:") else {
+              text.utf8.allSatisfy({ (32...126).contains($0) }) else {
             throw LinkError.message("Команда: 1–20 печатных ASCII-символов. Например: 1, on, off, status, ping.")
         }
         return text
