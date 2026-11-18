@@ -6,7 +6,7 @@ import sys
 
 def verify(aapt, apk):
     metadata = subprocess.check_output([aapt, "dump", "badging", apk], text=True)
-    for expected in ["package: name='dev.esplink.controller'", "versionName='1.2.4'", "versionCode='4'",
+    for expected in ["package: name='dev.esplink.controller'", "versionName='1.2.5'", "versionCode='5'",
                      "sdkVersion:'26'", "targetSdkVersion:'35'", "launchable-activity: name='dev.esplink.controller.MainActivity'",
                      "android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE"]:
         if expected not in metadata:
@@ -17,7 +17,7 @@ def verify(aapt, apk):
             raise ValueError(f"Wi-Fi-only APK must not contain: {forbidden}")
     if "application-debuggable" in metadata:
         raise ValueError("Release APK must not be debuggable")
-    print("Signed Wi-Fi-only Android release metadata verified: ESP Link 1.2.4, Android 8+")
+    print("Signed Wi-Fi-only Android release metadata verified: ESP Link 1.2.5, Android 8+")
 
 
 if __name__ == "__main__":

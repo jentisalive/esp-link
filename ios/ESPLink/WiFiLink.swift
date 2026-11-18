@@ -146,7 +146,11 @@ final class WiFiLink: ObservableObject {
         }
         guard (200...299).contains(http.statusCode) else {
             if http.statusCode == 401 { throw LinkError.message("Неверный токен устройства.") }
+            if body == "m1test" && (http.statusCode == 409 || http.statusCode == 503) { return data }
             if http.statusCode == 409 { throw LinkError.message(CommandProtocol.explain("error:busy")) }
+            if http.statusCode == 400 && (body == "m1test" || body == "m1stop") {
+                throw LinkError.message("Для управления мотором нужна обновлённая прошивка.")
+            }
             if http.statusCode == 400 { throw LinkError.message(CommandProtocol.explain("error:command")) }
             throw LinkError.message("Ошибка HTTP \(http.statusCode). Команда могла выполниться; повторите только вручную.")
         }

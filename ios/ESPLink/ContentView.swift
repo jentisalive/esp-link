@@ -130,6 +130,12 @@ struct ContentView: View {
                 quickButton("Выключить", command: "off", icon: "moon")
                 quickButton("Проверка", command: "ping", icon: "waveform.path")
             }
+            HStack(spacing: 10) {
+                quickButton("Тест мотора 1", command: "m1test", icon: "gearshape")
+                quickButton("Стоп мотора 1", command: "m1stop", icon: "stop.fill")
+            }
+            Text("Один цикл · 2 с вперёд, 1 с пауза, 2 с назад. Мотор 2 не используется.")
+                .font(.caption).foregroundStyle(Palette.muted)
             HStack(spacing: 12) {
                 TextField("Команда, например 1", text: $model.command)
                     .textInputAutocapitalization(.never).autocorrectionDisabled()

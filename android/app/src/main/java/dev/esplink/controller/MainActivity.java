@@ -145,6 +145,15 @@ public final class MainActivity extends Activity {
             weighted(quick, command);
         }
         add(commands, quick, 10);
+        LinearLayout motor = row();
+        Button motorTest = button("Тест мотора 1", () -> send("m1test"), false);
+        Button motorStop = button("Стоп мотора 1", () -> send("m1stop"), false);
+        commandButtons.add(motorTest);
+        commandButtons.add(motorStop);
+        weighted(motor, motorTest);
+        weighted(motor, motorStop);
+        add(commands, motor, 10);
+        add(commands, text("Один цикл · 2 с вперёд, 1 с пауза, 2 с назад. Мотор 2 не используется.", 11, MUTED), 6);
         commandField = input("Команда, например 1", false);
         commandField.setText("1");
         commandField.setImeOptions(EditorInfo.IME_ACTION_SEND);

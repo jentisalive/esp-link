@@ -5,7 +5,9 @@
 #include <esp_system.h>
 #include <esp_bt.h>
 #include <esp32-hal-bt.h>
+#include <atomic>
 #include "CommandEngine.h"
+#include "MotorATest.h"
 #include "PasswordPolicy.h"
 
 #ifndef LED_PIN
@@ -17,6 +19,11 @@
 
 namespace {
 constexpr size_t MAX_COMMAND = 20;
+constexpr uint8_t MOTOR_A_IN1 = 25;
+constexpr uint8_t MOTOR_A_IN2 = 26;
+enum class MotorState : uint8_t { Idle, Requested, Running, Stopping };
+std::atomic<MotorState> motorState{MotorState::Idle};
+bool motorAvailable = false;
 WebServer http(80);
 CommandEngine engine;
 String deviceName;
@@ -27,6 +34,54 @@ char serialLine[96]{};
 size_t serialLength = 0;
 bool discardSerialLine = false;
 uint32_t serialLastByte = 0;
+
+void requestMotorStop() {
+    auto state = motorState.load();
+    while (state != MotorState::Idle && state != MotorState::Stopping &&
+           !motorState.compare_exchange_weak(state, MotorState::Stopping)) {}
+}
+
+void writeMotorA(int duty) {
+    // Drop the opposite input first. Both LOW is the inactive state.
+    if (duty > 0) {
+        analogWrite(MOTOR_A_IN2, 0);
+        analogWrite(MOTOR_A_IN1, duty);
+    } else {
+        analogWrite(MOTOR_A_IN1, 0);
+        analogWrite(MOTOR_A_IN2, -duty);
+    }
+}
+
+// Keep the cutoff independent of blocking HTTP/Serial work in loop().
+void motorTask(void*) {
+    uint32_t started = 0;
+    int previousDuty = 0;
+    for (;;) {
+        auto state = motorState.load();
+        if (state == MotorState::Requested) {
+            if (motorState.compare_exchange_strong(state, MotorState::Running)) started = millis();
+            state = motorState.load();
+        }
+        const uint32_t elapsed = millis() - started;
+        if (state == MotorState::Running && elapsed >= 5000) {
+            requestMotorStop();
+            state = MotorState::Stopping;
+        }
+        int duty = state == MotorState::Running ? motorATestDuty(elapsed) : 0;
+        if (previousDuty > 0 && duty < 0) {
+            // A stalled task missed the neutral phase: abort instead of reversing abruptly.
+            requestMotorStop();
+            state = MotorState::Stopping;
+            duty = 0;
+        }
+        if (duty != previousDuty) {
+            writeMotorA(duty);
+            previousDuty = duty;
+        }
+        if (state == MotorState::Stopping) motorState.store(MotorState::Idle);
+        vTaskDelay(pdMS_TO_TICKS(10) > 0 ? pdMS_TO_TICKS(10) : 1);
+    }
+}
 
 String randomHex(size_t length) {
     String result;
@@ -90,6 +145,26 @@ void setupHTTP() {
                 http.send(400, "application/json", "{\"reply\":\"error:command\"}"); return;
             }
         }
+        if (command == "m1stop") {
+            requestMotorStop();
+            http.send(200, "application/json", "{\"reply\":\"ok:m1stop\"}");
+            return;
+        }
+        if (command == "m1test") {
+            if (!motorAvailable || WiFi.softAPgetStationNum() == 0) {
+                http.send(503, "application/json", "{\"reply\":\"error:m1-unavailable\"}");
+                return;
+            }
+            auto idle = MotorState::Idle;
+            if (!motorState.compare_exchange_strong(idle, MotorState::Requested)) {
+                http.send(409, "application/json", "{\"reply\":\"error:m1-busy\"}");
+                return;
+            }
+            // Cover a station disconnect racing with the state change above.
+            if (WiFi.softAPgetStationNum() == 0) requestMotorStop();
+            http.send(202, "application/json", "{\"reply\":\"ok:m1test\"}");
+            return;
+        }
         const auto result = engine.execute(command.c_str(), millis());
         int code = 200;
         if (result == CommandEngine::Reply::Accepted) code = 202;
@@ -148,7 +223,7 @@ void startAP() {
 }
 
 void printIdentity() {
-    Serial.println("\n=== ESP Link 1.2.4 / Wi-Fi ONLY ===");
+    Serial.println("\n=== ESP Link 1.2.5 / Wi-Fi ONLY ===");
     Serial.println("Device / Wi-Fi SSID: " + deviceName);
     Serial.println("Device token: " + deviceToken);
     Serial.println("Wi-Fi password: " + wifiPassword);
@@ -169,6 +244,7 @@ void saveDeviceToken(const String& next) {
     preferences.end();
     if (saved == 0) { Serial.println("ESPLINK:ERROR:NVS"); return; }
     deviceToken = next;
+    requestMotorStop();
     Serial.println("ESPLINK:TOKEN-SAVED");
 }
 
@@ -247,6 +323,11 @@ void writeLED() {
 
 void setup() {
     Serial.begin(115200);
+    pinMode(MOTOR_A_IN1, OUTPUT);
+    pinMode(MOTOR_A_IN2, OUTPUT);
+    digitalWrite(MOTOR_A_IN1, LOW);
+    digitalWrite(MOTOR_A_IN2, LOW);
+    motorAvailable = xTaskCreate(motorTask, "motorA", 3072, nullptr, 2, nullptr) == pdPASS;
     pinMode(LED_PIN, OUTPUT);
     writeLED();
     // No Bluetooth stack, services, advertising, scanning or connections are initialized.
@@ -255,6 +336,7 @@ void setup() {
     }
     esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
     WiFi.persistent(false);  // AP credentials live only in our explicit NVS settings.
+    WiFi.onEvent([](WiFiEvent_t) { requestMotorStop(); }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
     WiFi.mode(WIFI_AP);
     loadIdentity();
     startAP();
@@ -265,6 +347,7 @@ void setup() {
 void loop() {
     processSerial();
     if (restartAP) {
+        requestMotorStop();
         restartAP = false;
         http.stop();
         WiFi.softAPdisconnect(false);

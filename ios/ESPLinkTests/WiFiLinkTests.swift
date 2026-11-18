@@ -74,6 +74,29 @@ final class WiFiLinkTests: XCTestCase {
         XCTAssertEqual(posts, 1)
     }
 
+    func testMotorCommandsUseSingleRequests() async throws {
+        var posts = 0
+        MockBoardProtocol.handler = { request in
+            if request.httpMethod == "POST" {
+                posts += 1
+                XCTAssertEqual(request.url?.path, "/api/command")
+                if posts == 1 { return (202, #"{"reply":"ok:m1test"}"#) }
+                if posts == 2 { return (409, #"{"reply":"error:m1-busy"}"#) }
+                return (200, #"{"reply":"ok:m1stop"}"#)
+            }
+            return (200, #"{"name":"ESP32-Test","protocolVersion":1,"busy":false,"led":false,"completedJob":0}"#)
+        }
+        let wifi = link()
+        defer { wifi.disconnect() }
+        try await wifi.connect(host: "192.168.4.1", token: "123456abcdef")
+        var replies: [String] = []
+        for command in ["m1test", "m1test", "m1stop"] {
+            try await wifi.send(command) { replies.append($0) }
+        }
+        XCTAssertEqual(replies, ["ok:m1test", "error:m1-busy", "ok:m1stop"])
+        XCTAssertEqual(posts, 3)
+    }
+
     func testBusyCommandIsNotRetried() async throws {
         var posts = 0
         MockBoardProtocol.handler = { request in
