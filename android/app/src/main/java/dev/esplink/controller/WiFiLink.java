@@ -130,13 +130,14 @@ final class WiFiLink {
                 try (java.io.OutputStream output = connection.getOutputStream()) { output.write(bytes); }
             }
             int code = connection.getResponseCode();
-            if ("m1test".equals(body) && (code == 409 || code == 503)) {
+            boolean motorTest = "m1test".equals(body) || "mtest".equals(body);
+            if (motorTest && (code == 409 || code == 503)) {
                 return new JSONObject().put("reply", code == 409 ? "error:m1-busy" : "error:m1-unavailable");
             }
             if (code == 401) throw new IllegalStateException(CommandProtocol.explain("error:auth"));
             if (code == 409) throw new IllegalStateException(CommandProtocol.explain("error:busy"));
-            if (code == 400 && ("m1test".equals(body) || "m1stop".equals(body))) {
-                throw new IllegalStateException("Для управления мотором нужна обновлённая прошивка.");
+            if (code == 400 && (motorTest || "m1stop".equals(body))) {
+                throw new IllegalStateException("Для этой команды нужна обновлённая прошивка ESP32.");
             }
             if (code == 400) throw new IllegalStateException(CommandProtocol.explain("error:command"));
             if (code < 200 || code >= 300) throw new IllegalStateException("HTTP " + code + ". Перенаправления запрещены.");

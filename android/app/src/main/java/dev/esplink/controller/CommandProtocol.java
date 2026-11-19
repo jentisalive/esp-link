@@ -61,9 +61,10 @@ public final class CommandProtocol {
             case "ok:on": return "Светодиод включён.";
             case "ok:off": return "Светодиод выключен.";
             case "ok:m1test": return "Плата приняла команду теста мотора 1.";
-            case "ok:m1stop": return "Плата приняла команду остановки мотора 1.";
-            case "error:m1-busy": return "Тест мотора 1 уже идёт или останавливается.";
-            case "error:m1-unavailable": return "Тест мотора 1 недоступен на плате.";
+            case "ok:mtest": return "Плата приняла команду теста двух моторов.";
+            case "ok:m1stop": return "Плата приняла команду остановки моторов.";
+            case "error:m1-busy": return "Тест моторов уже идёт или останавливается.";
+            case "error:m1-unavailable": return "Тест моторов недоступен на плате.";
             case "pong": return "Pong — плата на связи.";
             case "error:auth": return "Неверный токен устройства.";
             case "error:busy": return "Плата ещё мигает. Подождите.";

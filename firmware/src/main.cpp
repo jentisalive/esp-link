@@ -5,8 +5,10 @@
 #include <esp_system.h>
 #include <esp_bt.h>
 #include <esp32-hal-bt.h>
+#include <esp_arduino_version.h>
 #include <atomic>
 #include "CommandEngine.h"
+#include "DualMotorTest.h"
 #include "MotorATest.h"
 #include "PasswordPolicy.h"
 
@@ -19,9 +21,13 @@
 
 namespace {
 constexpr size_t MAX_COMMAND = 20;
-constexpr uint8_t MOTOR_A_IN1 = 25;
-constexpr uint8_t MOTOR_A_IN2 = 26;
-enum class MotorState : uint8_t { Idle, Requested, Running, Stopping };
+constexpr uint8_t MOTOR_PINS[] = {25, 26, 27, 14};
+constexpr uint8_t MOTOR_PIN_COUNT = sizeof(MOTOR_PINS) / sizeof(MOTOR_PINS[0]);
+constexpr unsigned MOTOR_PWM_FREQ = 10000;
+constexpr uint8_t MOTOR_PWM_BITS = 8;
+constexpr uint32_t MOTOR_TICK_MS = 10;
+constexpr uint32_t MOTOR_MAX_TICK_GAP_MS = 100;
+enum class MotorState : uint8_t { Idle, RequestedA, RequestedAB, RunningA, RunningAB, Stopping };
 std::atomic<MotorState> motorState{MotorState::Idle};
 bool motorAvailable = false;
 WebServer http(80);
@@ -41,45 +47,89 @@ void requestMotorStop() {
            !motorState.compare_exchange_weak(state, MotorState::Stopping)) {}
 }
 
-void writeMotorA(int duty) {
+void writeMotorPin(uint8_t index, int duty) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWrite(MOTOR_PINS[index], duty);
+#else
+    ledcWrite(index, duty);
+#endif
+}
+
+bool setupMotorOutputs() {
+    for (auto pin : MOTOR_PINS) {
+        pinMode(pin, OUTPUT);
+        digitalWrite(pin, LOW);
+    }
+    for (uint8_t index = 0; index < MOTOR_PIN_COUNT; ++index) {
+        bool attached;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+        attached = ledcAttach(MOTOR_PINS[index], MOTOR_PWM_FREQ, MOTOR_PWM_BITS);
+#else
+        attached = ledcSetup(index, MOTOR_PWM_FREQ, MOTOR_PWM_BITS) > 0;
+        if (attached) ledcAttachPin(MOTOR_PINS[index], index);
+#endif
+        if (!attached) {
+            for (uint8_t active = 0; active < index; ++active) {
+                writeMotorPin(active, 0);
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+                ledcDetach(MOTOR_PINS[active]);
+#else
+                ledcDetachPin(MOTOR_PINS[active]);
+#endif
+                pinMode(MOTOR_PINS[active], OUTPUT);
+                digitalWrite(MOTOR_PINS[active], LOW);
+            }
+            return false;
+        }
+        writeMotorPin(index, 0);
+    }
+    return true;
+}
+
+void writeMotor(uint8_t first, int duty) {
     // Drop the opposite input first. Both LOW is the inactive state.
     if (duty > 0) {
-        analogWrite(MOTOR_A_IN2, 0);
-        analogWrite(MOTOR_A_IN1, duty);
+        writeMotorPin(first + 1, 0);
+        writeMotorPin(first, duty);
     } else {
-        analogWrite(MOTOR_A_IN1, 0);
-        analogWrite(MOTOR_A_IN2, -duty);
+        writeMotorPin(first, 0);
+        writeMotorPin(first + 1, -duty);
     }
 }
 
 // Keep the cutoff independent of blocking HTTP/Serial work in loop().
 void motorTask(void*) {
     uint32_t started = 0;
-    int previousDuty = 0;
+    uint32_t lastTick = 0;
+    MotorDuties previous{0, 0};
     for (;;) {
+        const uint32_t now = millis();
         auto state = motorState.load();
-        if (state == MotorState::Requested) {
-            if (motorState.compare_exchange_strong(state, MotorState::Running)) started = millis();
+        if (state == MotorState::RequestedA || state == MotorState::RequestedAB) {
+            const auto running = state == MotorState::RequestedA ? MotorState::RunningA : MotorState::RunningAB;
+            if (motorState.compare_exchange_strong(state, running)) started = lastTick = now;
             state = motorState.load();
         }
-        const uint32_t elapsed = millis() - started;
-        if (state == MotorState::Running && elapsed >= 5000) {
-            requestMotorStop();
-            state = MotorState::Stopping;
+        const uint32_t elapsed = now - started;
+        MotorDuties next{0, 0};
+        if (state == MotorState::RunningA || state == MotorState::RunningAB) {
+            const bool dual = state == MotorState::RunningAB;
+            if (elapsed >= (dual ? DUAL_MOTOR_TEST_MS : 5000u) || now - lastTick > MOTOR_MAX_TICK_GAP_MS) {
+                // If scheduling skipped part of the cycle, abort rather than jump to another phase.
+                requestMotorStop();
+            } else {
+                next = dual ? dualMotorTestDuties(elapsed) : MotorDuties{motorATestDuty(elapsed), 0};
+            }
+            state = motorState.load();
         }
-        int duty = state == MotorState::Running ? motorATestDuty(elapsed) : 0;
-        if (previousDuty > 0 && duty < 0) {
-            // A stalled task missed the neutral phase: abort instead of reversing abruptly.
-            requestMotorStop();
-            state = MotorState::Stopping;
-            duty = 0;
-        }
-        if (duty != previousDuty) {
-            writeMotorA(duty);
-            previousDuty = duty;
-        }
+        lastTick = now;
+        if (state == MotorState::Stopping) next = {0, 0};
+        if (next.a != previous.a) writeMotor(0, next.a);
+        if (next.b != previous.b) writeMotor(2, next.b);
+        previous = next;
         if (state == MotorState::Stopping) motorState.store(MotorState::Idle);
-        vTaskDelay(pdMS_TO_TICKS(10) > 0 ? pdMS_TO_TICKS(10) : 1);
+        constexpr TickType_t tickDelay = pdMS_TO_TICKS(MOTOR_TICK_MS);
+        vTaskDelay(tickDelay > 0 ? tickDelay : 1);
     }
 }
 
@@ -150,19 +200,20 @@ void setupHTTP() {
             http.send(200, "application/json", "{\"reply\":\"ok:m1stop\"}");
             return;
         }
-        if (command == "m1test") {
+        if (command == "m1test" || command == "mtest") {
+            const bool dual = command == "mtest";
             if (!motorAvailable || WiFi.softAPgetStationNum() == 0) {
                 http.send(503, "application/json", "{\"reply\":\"error:m1-unavailable\"}");
                 return;
             }
             auto idle = MotorState::Idle;
-            if (!motorState.compare_exchange_strong(idle, MotorState::Requested)) {
+            if (!motorState.compare_exchange_strong(idle, dual ? MotorState::RequestedAB : MotorState::RequestedA)) {
                 http.send(409, "application/json", "{\"reply\":\"error:m1-busy\"}");
                 return;
             }
             // Cover a station disconnect racing with the state change above.
             if (WiFi.softAPgetStationNum() == 0) requestMotorStop();
-            http.send(202, "application/json", "{\"reply\":\"ok:m1test\"}");
+            http.send(202, "application/json", dual ? "{\"reply\":\"ok:mtest\"}" : "{\"reply\":\"ok:m1test\"}");
             return;
         }
         const auto result = engine.execute(command.c_str(), millis());
@@ -223,7 +274,7 @@ void startAP() {
 }
 
 void printIdentity() {
-    Serial.println("\n=== ESP Link 1.2.5 / Wi-Fi ONLY ===");
+    Serial.println("\n=== ESP Link 1.2.6 / Wi-Fi ONLY / MOTOR A+B ===");
     Serial.println("Device / Wi-Fi SSID: " + deviceName);
     Serial.println("Device token: " + deviceToken);
     Serial.println("Wi-Fi password: " + wifiPassword);
@@ -323,11 +374,8 @@ void writeLED() {
 
 void setup() {
     Serial.begin(115200);
-    pinMode(MOTOR_A_IN1, OUTPUT);
-    pinMode(MOTOR_A_IN2, OUTPUT);
-    digitalWrite(MOTOR_A_IN1, LOW);
-    digitalWrite(MOTOR_A_IN2, LOW);
-    motorAvailable = xTaskCreate(motorTask, "motorA", 3072, nullptr, 2, nullptr) == pdPASS;
+    motorAvailable = setupMotorOutputs() && xTaskCreate(motorTask, "motors", 3072, nullptr, 2, nullptr) == pdPASS;
+    if (!motorAvailable) Serial.println("ERROR: motor outputs unavailable");
     pinMode(LED_PIN, OUTPUT);
     writeLED();
     // No Bluetooth stack, services, advertising, scanning or connections are initialized.

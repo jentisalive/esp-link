@@ -131,10 +131,11 @@ struct ContentView: View {
                 quickButton("Проверка", command: "ping", icon: "waveform.path")
             }
             HStack(spacing: 10) {
-                quickButton("Тест мотора 1", command: "m1test", icon: "gearshape")
-                quickButton("Стоп мотора 1", command: "m1stop", icon: "stop.fill")
+                quickButton("Тест мотора A", command: "m1test", icon: "gearshape")
+                quickButton("Тест двух моторов", command: "mtest", icon: "gearshape.2")
             }
-            Text("Один цикл · 2 с вперёд, 1 с пауза, 2 с назад. Мотор 2 не используется.")
+            quickButton("Стоп моторов", command: "m1stop", icon: "stop.fill")
+            Text("Двойной тест: A → B → оба вперёд → разворот. Один цикл, около 18 с. Поднимите гусеницы.")
                 .font(.caption).foregroundStyle(Palette.muted)
             HStack(spacing: 12) {
                 TextField("Команда, например 1", text: $model.command)

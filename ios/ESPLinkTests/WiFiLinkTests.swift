@@ -81,7 +81,9 @@ final class WiFiLinkTests: XCTestCase {
                 posts += 1
                 XCTAssertEqual(request.url?.path, "/api/command")
                 if posts == 1 { return (202, #"{"reply":"ok:m1test"}"#) }
-                if posts == 2 { return (409, #"{"reply":"error:m1-busy"}"#) }
+                if posts == 2 { return (202, #"{"reply":"ok:mtest"}"#) }
+                if posts == 3 { return (409, #"{"reply":"error:m1-busy"}"#) }
+                if posts == 4 { return (503, #"{"reply":"error:m1-unavailable"}"#) }
                 return (200, #"{"reply":"ok:m1stop"}"#)
             }
             return (200, #"{"name":"ESP32-Test","protocolVersion":1,"busy":false,"led":false,"completedJob":0}"#)
@@ -90,11 +92,11 @@ final class WiFiLinkTests: XCTestCase {
         defer { wifi.disconnect() }
         try await wifi.connect(host: "192.168.4.1", token: "123456abcdef")
         var replies: [String] = []
-        for command in ["m1test", "m1test", "m1stop"] {
+        for command in ["m1test", "mtest", "mtest", "mtest", "m1stop"] {
             try await wifi.send(command) { replies.append($0) }
         }
-        XCTAssertEqual(replies, ["ok:m1test", "error:m1-busy", "ok:m1stop"])
-        XCTAssertEqual(posts, 3)
+        XCTAssertEqual(replies, ["ok:m1test", "ok:mtest", "error:m1-busy", "error:m1-unavailable", "ok:m1stop"])
+        XCTAssertEqual(posts, 5)
     }
 
     func testBusyCommandIsNotRetried() async throws {
