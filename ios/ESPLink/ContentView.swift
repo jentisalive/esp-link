@@ -10,6 +10,7 @@ private enum Palette {
 struct ContentView: View {
     @StateObject private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
+    @State private var showingRemote = false
 
     var body: some View {
         ScrollView {
@@ -29,9 +30,17 @@ struct ContentView: View {
         .background(Palette.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .tint(Palette.mint)
+        .fullScreenCover(isPresented: $showingRemote) {
+            RemotePanel(link: model.wifi, active: scenePhase == .active) { showingRemote = false }
+                .background(Palette.background)
+        }
         .onChange(of: scenePhase) { phase in
             // This controller intentionally does not run commands in the background.
-            if phase == .background { model.disconnect() }
+            if phase == .background {
+                if showingRemote { model.wifi.stopRemote() }
+                showingRemote = false
+                model.disconnect()
+            }
         }
         .alert("ESP Link", isPresented: Binding(
             get: { model.alert != nil },
@@ -112,6 +121,8 @@ struct ContentView: View {
     private var commandCard: some View {
         VStack(alignment: .leading, spacing: 18) {
             sectionTitle("02", "Команды", icon: "terminal")
+            Button("Открыть пульт") { showingRemote = true }
+                .buttonStyle(.borderedProminent)
             Button { model.send("1") } label: {
                 HStack(spacing: 14) {
                     Image(systemName: "lightbulb.max.fill").font(.system(size: 29))

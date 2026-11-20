@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' file:; style-src 'unsafe-inline'; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>ESP Link · Пульт</title>
+<style>
+:root{color-scheme:dark;--bg:#090e13;--card:#14212a;--mint:#78f5bd;--muted:#a0b0bb}
+*{box-sizing:border-box} [hidden]{display:none!important}
+body{margin:0;padding: max(8px,env(safe-area-inset-top)) max(12px,env(safe-area-inset-right)) max(8px,env(safe-area-inset-bottom)) max(12px,env(safe-area-inset-left));height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr) auto;gap:8px;background:var(--bg);color:white;font:system-ui;font-family:system-ui,sans-serif;user-select:none;overscroll-behavior:none}
+header,footer{display:flex;align-items:center;justify-content:space-between;gap:8px}header strong{color:var(--mint);font-size:14px;letter-spacing:.12em}footer,#battery{font:12px ui-monospace,monospace;color:var(--muted)}#battery.low{color:#ffd18d}
+button{font:600 14px system-ui;color:white;border:1px solid #3d505d;border-radius:12px;background:var(--card);min-height:44px;padding:0 12px}button:disabled{opacity:.45}#stop{background:#84292e;border-color:#f68b90}#controls{position:relative;overflow:hidden;min-height:0;border:1px solid #344853;border-radius:20px;background:#101a22;touch-action:none}#controls.edit{background-image:radial-gradient(#46616b 1px,transparent 1px);background-size:16px 16px}
+#stick,#bucket{position:absolute;touch-action:none}#stick{--side:min(56vh,26vw,218px);width:var(--side);height:var(--side);min-height:0;border-radius:50%;background:#0c151d;border:2px solid #46616b;padding:0}#stick::before,#stick::after{content:"";position:absolute;background:#2a434a;pointer-events:none}#stick::before{width:1px;height:84%;top:8%;left:50%}#stick::after{height:1px;width:84%;left:8%;top:50%}#nub{position:absolute;pointer-events:none;z-index:1;width:31%;height:31%;left:34.5%;top:34.5%;border-radius:50%;background:var(--mint);box-shadow:0 0 0 5px #283f3c}#bucket{min-width:94px;min-height:58px}#prompt{margin:auto;text-align:center;color:var(--muted);padding:12px}#controls:has(#prompt:not([hidden])){display:grid}
+#controls.prompt{display:grid}
+@supports not (height:100dvh){body{height:100vh}}
+@supports not (width:min(1vw,1vh)){#stick{width:120px;height:120px}}
+</style>
+<header><button id="back">Назад</button><strong>ESP LINK / ПУЛЬТ</strong><span id="battery">АКБ —</span><button id="edit" type="button">Раскладка</button><button id="stop" type="button">Стоп</button></header>
+<main id="controls">
+  <p id="prompt">Подключение…</p>
+  <button type="button" id="stick" aria-label="Джойстик" hidden><span id="nub"></span></button>
+  <button type="button" id="bucket" hidden>Ковш</button>
+</main>
+<footer><span id="message" role="status">Wi-Fi · локально</span><button id="reset" hidden>Сбросить раскладку</button></footer>
+<script src="drive.js"></script>
+<script src="panel.js"></script>
+</html>

@@ -23,6 +23,7 @@ final class WiFiLink {
     private final LinkListener listener;
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
+    private final ExecutorService stopWorker = Executors.newSingleThreadExecutor();
     private final AtomicInteger generation = new AtomicInteger();
     private Future<?> operation;
     private boolean ready;
@@ -92,6 +93,62 @@ final class WiFiLink {
         });
     }
 
+    interface RemoteReply { void finish(int code, JSONObject data); }
+
+    void remote(String op, String body, RemoteReply reply) {
+        if ("stop".equals(op)) { stopRemote(reply); return; }
+        if (!ready) { reply.finish(0, new JSONObject()); return; }
+        String path;
+        String payload;
+        switch (op) {
+            case "status": path = "api/remote"; payload = null; break;
+            case "arm": path = "api/remote/arm"; payload = "arm"; break;
+            case "frame":
+                if (!body.matches("[0-9]{1,10},[0-9]{1,6},-?[0-9]{1,3},-?[0-9]{1,3},[01]")) {
+                    reply.finish(400, new JSONObject()); return;
+                }
+                path = "api/remote/frame"; payload = body; break;
+            default: reply.finish(400, new JSONObject()); return;
+        }
+        int id = generation.get();
+        worker.submit(() -> {
+            try {
+                JSONObject response = request(id, path, payload, true);
+                int code = response.optInt("httpStatus", 200);
+                post(id, () -> reply.finish(code, response));
+            } catch (Exception error) { post(id, () -> reply.finish(0, new JSONObject())); }
+        });
+    }
+
+    private void stopRemote(RemoteReply reply) {
+        Network route = network;
+        URI base = baseUrl;
+        String credential = token;
+        if (!ready || route == null || base == null) { reply.finish(0, new JSONObject()); return; }
+        stopWorker.execute(() -> {
+            HttpURLConnection connection = null;
+            int status = 0;
+            try {
+                connection = (HttpURLConnection) route.openConnection(base.resolve("api/command").toURL(), Proxy.NO_PROXY);
+                connection.setConnectTimeout(230);
+                connection.setReadTimeout(230);
+                connection.setInstanceFollowRedirects(false);
+                connection.setUseCaches(false);
+                connection.setRequestProperty("X-Device-Token", credential);
+                connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8");
+                connection.setRequestMethod("POST");
+                connection.setDoOutput(true);
+                byte[] command = "m1stop".getBytes(StandardCharsets.US_ASCII);
+                connection.setFixedLengthStreamingMode(command.length);
+                try (java.io.OutputStream output = connection.getOutputStream()) { output.write(command); }
+                status = connection.getResponseCode();
+            } catch (Exception ignored) { /* ESP32 times out even if explicit stop is lost. */ }
+            finally { if (connection != null) connection.disconnect(); }
+            int result = status;
+            main.post(() -> reply.finish(result, new JSONObject()));
+        });
+    }
+
     private final Runnable heartbeat = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -106,6 +163,10 @@ final class WiFiLink {
     };
 
     private JSONObject request(int id, String path, String body) throws Exception {
+        return request(id, path, body, false);
+    }
+
+    private JSONObject request(int id, String path, String body, boolean remote) throws Exception {
         check(id);
         // Snapshot credentials before disconnect() can clear them; the generation gates every result.
         Network route = network;
@@ -116,8 +177,8 @@ final class WiFiLink {
         activeRequest = connection;
         try {
             check(id);
-            connection.setConnectTimeout(3500);
-            connection.setReadTimeout(4000);
+            connection.setConnectTimeout(remote ? 230 : 3500);
+            connection.setReadTimeout(remote ? 230 : 4000);
             connection.setInstanceFollowRedirects(false);
             connection.setUseCaches(false);
             connection.setRequestProperty("X-Device-Token", credential);
@@ -130,6 +191,7 @@ final class WiFiLink {
                 try (java.io.OutputStream output = connection.getOutputStream()) { output.write(bytes); }
             }
             int code = connection.getResponseCode();
+            if (remote && code != 200) return new JSONObject().put("httpStatus", code);
             boolean motorTest = "m1test".equals(body) || "mtest".equals(body);
             if (motorTest && (code == 409 || code == 503)) {
                 return new JSONObject().put("reply", code == 409 ? "error:m1-busy" : "error:m1-unavailable");
@@ -189,5 +251,5 @@ final class WiFiLink {
         listener.onState("Не подключено", false, false);
     }
 
-    void close() { disconnect(); worker.shutdownNow(); }
+    void close() { disconnect(); worker.shutdownNow(); stopWorker.shutdown(); }
 }

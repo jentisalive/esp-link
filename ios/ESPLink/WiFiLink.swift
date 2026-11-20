@@ -130,10 +130,53 @@ final class WiFiLink: ObservableObject {
         return try JSONDecoder().decode(BoardStatus.self, from: data)
     }
 
-    private func request(path: String, method: String = "GET", body: String? = nil) async throws -> Data {
+    func remote(_ op: String, body: String) async -> (Int, [String: Any]) {
+        guard isReady else { return (0, [:]) }
+        let endpoint: (path: String, payload: String?)
+        switch op {
+        case "status": endpoint = ("api/remote", nil)
+        case "arm": endpoint = ("api/remote/arm", "arm")
+        case "frame":
+            guard body.utf8.count <= 32, body.range(of: #"\A[0-9]{1,10},[0-9]{1,6},-?[0-9]{1,3},-?[0-9]{1,3},[01]\z"#, options: .regularExpression) != nil else { return (400, [:]) }
+            endpoint = ("api/remote/frame", body)
+        default: return (400, [:])
+        }
+        let id = generation
+        do {
+            let data = try await request(path: endpoint.path, method: endpoint.payload == nil ? "GET" : "POST", body: endpoint.payload, remote: true)
+            guard generation == id else { return (0, [:]) }
+            return (200, (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:])
+        } catch let code as RemoteHTTPError {
+            return (code.status, [:])
+        } catch {
+            return (0, [:])
+        }
+    }
+
+    private struct RemoteHTTPError: Error { let status: Int }
+
+    @discardableResult
+    func stopRemote(_ reply: @escaping (Int) -> Void = { _ in }) -> Task<Void, Never>? {
+        guard isReady, let baseURL else { reply(0); return nil }
+        var request = URLRequest(url: baseURL.appendingPathComponent("api/command"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 0.23
+        request.setValue(token, forHTTPHeaderField: "X-Device-Token")
+        request.setValue("text/plain; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.httpBody = Data("m1stop".utf8)
+        return Task { [session] in
+            do {
+                let (_, response) = try await session.data(for: request)
+                reply((response as? HTTPURLResponse)?.statusCode ?? 0)
+            } catch { reply(0) }
+        }
+    }
+
+    private func request(path: String, method: String = "GET", body: String? = nil, remote: Bool = false) async throws -> Data {
         guard let baseURL else { throw LinkError.message("Нет подключения к плате.") }
         var request = URLRequest(url: baseURL.appendingPathComponent(path))
         request.httpMethod = method
+        if remote { request.timeoutInterval = 0.23 }
         request.setValue(token, forHTTPHeaderField: "X-Device-Token")
         if let body {
             request.httpBody = Data(body.utf8)
@@ -145,6 +188,7 @@ final class WiFiLink: ObservableObject {
             throw LinkError.message("Плата перенаправила запрос на другой адрес. Подключение отменено.")
         }
         guard (200...299).contains(http.statusCode) else {
+            if remote { throw RemoteHTTPError(status: http.statusCode) }
             if http.statusCode == 401 { throw LinkError.message("Неверный токен устройства.") }
             let motorTest = body == "m1test" || body == "mtest"
             if motorTest && (http.statusCode == 409 || http.statusCode == 503) { return data }
@@ -155,6 +199,7 @@ final class WiFiLink: ObservableObject {
             if http.statusCode == 400 { throw LinkError.message(CommandProtocol.explain("error:command")) }
             throw LinkError.message("Ошибка HTTP \(http.statusCode). Команда могла выполниться; повторите только вручную.")
         }
+        if remote && data.count > 8192 { throw RemoteHTTPError(status: 400) }
         return data
     }
 }

@@ -44,6 +44,7 @@ public final class MainActivity extends Activity {
     private TextView logView;
     private Button connectButton;
     private Button disconnectButton;
+    private RemotePanel remotePanel;
     private EditText tokenField;
     private EditText hostField;
     private EditText commandField;
@@ -132,6 +133,15 @@ public final class MainActivity extends Activity {
         add(connection, settings, 10);
 
         LinearLayout commands = card(page, "02  Команды");
+        Button remote = button("Открыть пульт", () -> {
+            if (remotePanel == null) {
+                remotePanel = new RemotePanel(this, wifi);
+                remotePanel.setOnDismissListener(d -> remotePanel = null);
+                remotePanel.show();
+            }
+        }, true);
+        commandButtons.add(remote);
+        add(commands, remote, 10);
         Button blink = button("☀  Мигнуть 3 раза  ↗", () -> send("1"), true);
         blink.setTextSize(19);
         blink.setMinHeight(dp(76));
@@ -252,6 +262,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onStop() {
         super.onStop();
+        if (remotePanel != null) remotePanel.dismiss();
         disconnect();
     }
 

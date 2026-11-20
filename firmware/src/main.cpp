@@ -6,11 +6,12 @@
 #include <esp_bt.h>
 #include <esp32-hal-bt.h>
 #include <esp_arduino_version.h>
-#include <atomic>
+#include <mutex>
 #include "CommandEngine.h"
 #include "DualMotorTest.h"
 #include "MotorATest.h"
 #include "PasswordPolicy.h"
+#include "RobotRemote.h"
 
 #ifndef LED_PIN
 #define LED_PIN 2
@@ -27,8 +28,16 @@ constexpr unsigned MOTOR_PWM_FREQ = 10000;
 constexpr uint8_t MOTOR_PWM_BITS = 8;
 constexpr uint32_t MOTOR_TICK_MS = 10;
 constexpr uint32_t MOTOR_MAX_TICK_GAP_MS = 100;
+constexpr uint8_t BUCKET_PIN = 33, BUCKET_CHANNEL = 4, BATTERY_PIN = 34;
+std::mutex driveLock;
+RemoteLease drive;
+Bucket bucket;
+bool bucketAttached = false;
+uint16_t bucketRest = 0, bucketRaised = 0, batteryGain = 0;
+int leftSign = 1, rightSign = 1;
+bool swapTracks = false;
 enum class MotorState : uint8_t { Idle, RequestedA, RequestedAB, RunningA, RunningAB, Stopping };
-std::atomic<MotorState> motorState{MotorState::Idle};
+MotorState motorState = MotorState::Idle;
 bool motorAvailable = false;
 WebServer http(80);
 CommandEngine engine;
@@ -41,10 +50,15 @@ size_t serialLength = 0;
 bool discardSerialLine = false;
 uint32_t serialLastByte = 0;
 
+// The drive lock also covers output writes; a revoked lease cannot apply its old PWM afterward.
+void stopLocked() {
+    drive.stop();
+    if (motorState != MotorState::Idle) motorState = MotorState::Stopping;
+}
+
 void requestMotorStop() {
-    auto state = motorState.load();
-    while (state != MotorState::Idle && state != MotorState::Stopping &&
-           !motorState.compare_exchange_weak(state, MotorState::Stopping)) {}
+    const std::lock_guard<std::mutex> lock(driveLock);
+    stopLocked();
 }
 
 void writeMotorPin(uint8_t index, int duty) {
@@ -63,7 +77,7 @@ bool setupMotorOutputs() {
     for (uint8_t index = 0; index < MOTOR_PIN_COUNT; ++index) {
         bool attached;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3
-        attached = ledcAttach(MOTOR_PINS[index], MOTOR_PWM_FREQ, MOTOR_PWM_BITS);
+        attached = ledcAttachChannel(MOTOR_PINS[index], MOTOR_PWM_FREQ, MOTOR_PWM_BITS, index);
 #else
         attached = ledcSetup(index, MOTOR_PWM_FREQ, MOTOR_PWM_BITS) > 0;
         if (attached) ledcAttachPin(MOTOR_PINS[index], index);
@@ -86,6 +100,26 @@ bool setupMotorOutputs() {
     return true;
 }
 
+bool moveBucket() {
+    if (!validBucket(bucketRest, bucketRaised)) return false;
+    if (!bucketAttached) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+        bucketAttached = ledcAttachChannel(BUCKET_PIN, 50, 14, BUCKET_CHANNEL);
+#else
+        bucketAttached = ledcSetup(BUCKET_CHANNEL, 50, 14) > 0;
+        if (bucketAttached) ledcAttachPin(BUCKET_PIN, BUCKET_CHANNEL);
+#endif
+    }
+    if (!bucketAttached) return false;
+    const unsigned duty = static_cast<unsigned>(bucket.next(bucketRest, bucketRaised)) * 16384 / 20000;
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+    return ledcWrite(BUCKET_PIN, duty);
+#else
+    ledcWrite(BUCKET_CHANNEL, duty);
+    return true;
+#endif
+}
+
 void writeMotor(uint8_t first, int duty) {
     // Drop the opposite input first. Both LOW is the inactive state.
     if (duty > 0) {
@@ -102,32 +136,38 @@ void motorTask(void*) {
     uint32_t started = 0;
     uint32_t lastTick = 0;
     MotorDuties previous{0, 0};
+    TrackOutput trackA, trackB;
     for (;;) {
-        const uint32_t now = millis();
-        auto state = motorState.load();
-        if (state == MotorState::RequestedA || state == MotorState::RequestedAB) {
-            const auto running = state == MotorState::RequestedA ? MotorState::RunningA : MotorState::RunningAB;
-            if (motorState.compare_exchange_strong(state, running)) started = lastTick = now;
-            state = motorState.load();
-        }
-        const uint32_t elapsed = now - started;
-        MotorDuties next{0, 0};
-        if (state == MotorState::RunningA || state == MotorState::RunningAB) {
-            const bool dual = state == MotorState::RunningAB;
-            if (elapsed >= (dual ? DUAL_MOTOR_TEST_MS : 5000u) || now - lastTick > MOTOR_MAX_TICK_GAP_MS) {
-                // If scheduling skipped part of the cycle, abort rather than jump to another phase.
-                requestMotorStop();
-            } else {
-                next = dual ? dualMotorTestDuties(elapsed) : MotorDuties{motorATestDuty(elapsed), 0};
+        {
+            const std::lock_guard<std::mutex> lock(driveLock);
+            const uint32_t now = millis();
+            if (motorState == MotorState::RequestedA || motorState == MotorState::RequestedAB) {
+                motorState = motorState == MotorState::RequestedA ? MotorState::RunningA : MotorState::RunningAB;
+                started = lastTick = now;
             }
-            state = motorState.load();
+            const uint32_t elapsed = now - started;
+            MotorDuties next{0, 0};
+            if (motorState == MotorState::RunningA || motorState == MotorState::RunningAB) {
+                const bool dual = motorState == MotorState::RunningAB;
+                if (elapsed >= (dual ? DUAL_MOTOR_TEST_MS : 5000u) || now - lastTick > MOTOR_MAX_TICK_GAP_MS) {
+                    // If scheduling skipped part of the cycle, abort rather than jump to another phase.
+                    stopLocked();
+                } else {
+                    next = dual ? dualMotorTestDuties(elapsed) : MotorDuties{motorATestDuty(elapsed), 0};
+                }
+            } else if (motorState == MotorState::Idle) {
+                if (now - lastTick > MOTOR_MAX_TICK_GAP_MS) drive.stop();
+                next = drive.output(now);
+                next = swapTracks ? MotorDuties{next.b * rightSign, next.a * leftSign}
+                                  : MotorDuties{next.a * leftSign, next.b * rightSign};
+            }
+            lastTick = now;
+            next = {trackA.apply(next.a, now), trackB.apply(next.b, now)};
+            if (next.a != previous.a) writeMotor(0, next.a);
+            if (next.b != previous.b) writeMotor(2, next.b);
+            previous = next;
+            if (motorState == MotorState::Stopping) motorState = MotorState::Idle;
         }
-        lastTick = now;
-        if (state == MotorState::Stopping) next = {0, 0};
-        if (next.a != previous.a) writeMotor(0, next.a);
-        if (next.b != previous.b) writeMotor(2, next.b);
-        previous = next;
-        if (state == MotorState::Stopping) motorState.store(MotorState::Idle);
         constexpr TickType_t tickDelay = pdMS_TO_TICKS(MOTOR_TICK_MS);
         vTaskDelay(tickDelay > 0 ? tickDelay : 1);
     }
@@ -171,9 +211,63 @@ bool authorizeHTTP() {
     return false;
 }
 
+int batteryAdcMillivolts() {
+    int sample = 0;
+    for (int i = 0; i < 8; ++i) sample += analogReadMilliVolts(BATTERY_PIN);
+    return sample / 8;
+}
+
+void setupRemoteHTTP() {
+    http.on("/api/remote", HTTP_GET, [] {
+        if (!authorizeHTTP()) return;
+        const int mv = batteryGain ? batteryMillivolts(batteryAdcMillivolts(), batteryGain) : 0;
+        String json = String("{\"version\":1,\"motors\":") + (motorAvailable ? "true" : "false") +
+            ",\"bucket\":" + (validBucket(bucketRest, bucketRaised) ? "true" : "false") +
+            ",\"mv\":" + String(mv) + ",\"low\":" + (batteryLow(mv) ? "true" : "false") + "}";
+        http.sendHeader("Cache-Control", "no-store");
+        http.send(200, "application/json", json);
+    });
+    http.on("/api/remote/arm", HTTP_POST, [] {
+        if (!authorizeHTTP()) return;
+        if (!motorAvailable || !WiFi.softAPgetStationNum()) {
+            http.send(503, "application/json", "{}"); return;
+        }
+        const uint32_t id = esp_random();
+        bool ok;
+        {
+            const std::lock_guard<std::mutex> lock(driveLock);
+            ok = motorState == MotorState::Idle && drive.open(id, millis());
+        }
+        if (!ok) { http.send(409, "application/json", "{}"); return; }
+        if (!WiFi.softAPgetStationNum()) { requestMotorStop(); http.send(503, "application/json", "{}"); return; }
+        http.send(200, "application/json", String("{\"id\":") + String(id) + "}");
+    });
+    http.on("/api/remote/frame", HTTP_POST, [] {
+        if (!authorizeHTTP()) return;
+        const String body = http.arg("plain");
+        unsigned long id, seq;
+        int x, y, toggle, consumed = 0;
+        if (body.length() > 32 || sscanf(body.c_str(), "%10lu,%6lu,%4d,%4d,%1d%n", &id, &seq, &x, &y, &toggle, &consumed) != 5 ||
+            static_cast<unsigned>(consumed) != body.length() || (toggle != 0 && toggle != 1)) {
+            http.send(400, "application/json", "{}"); return;
+        }
+        if (!WiFi.softAPgetStationNum()) { requestMotorStop(); http.send(503, "application/json", "{}"); return; }
+        bool ok, servoOK = true;
+        {
+            const std::lock_guard<std::mutex> lock(driveLock);
+            ok = motorState == MotorState::Idle && drive.update(id, seq, x, y, millis());
+            if (ok && toggle && !moveBucket()) { servoOK = false; stopLocked(); }
+        }
+        if (!ok) { http.send(409, "application/json", "{}"); return; }
+        if (!servoOK) { http.send(503, "application/json", "{}"); return; }
+        http.send(200, "application/json", "{}");
+    });
+}
+
 void setupHTTP() {
     const char* headers[] = {"X-Device-Token"};
     http.collectHeaders(headers, 1);
+    setupRemoteHTTP();
     http.on("/api/status", HTTP_GET, [] {
         if (!authorizeHTTP()) return;
         String json = "{\"name\":\"" + deviceName + "\",\"protocolVersion\":1,\"transport\":\"wifi-only\",\"busy\":";
@@ -206,8 +300,13 @@ void setupHTTP() {
                 http.send(503, "application/json", "{\"reply\":\"error:m1-unavailable\"}");
                 return;
             }
-            auto idle = MotorState::Idle;
-            if (!motorState.compare_exchange_strong(idle, dual ? MotorState::RequestedAB : MotorState::RequestedA)) {
+            bool started;
+            {
+                const std::lock_guard<std::mutex> lock(driveLock);
+                started = !drive.live(millis()) && motorState == MotorState::Idle;
+                if (started) motorState = dual ? MotorState::RequestedAB : MotorState::RequestedA;
+            }
+            if (!started) {
                 http.send(409, "application/json", "{\"reply\":\"error:m1-busy\"}");
                 return;
             }
@@ -253,6 +352,14 @@ void loadIdentity() {
         }
     }
     wifiPassword = preferences.getString("wifi-pass", "");
+    const uint32_t pair = preferences.getUInt("bucket-pair", 0);
+    bucketRest = pair >> 16;
+    bucketRaised = pair & 0xffff;
+    batteryGain = preferences.getUShort("battery-gain", 0);
+    const uint8_t tracks = preferences.getUChar("track-flags", 0);
+    swapTracks = tracks & 1;
+    leftSign = tracks & 2 ? -1 : 1;
+    rightSign = tracks & 4 ? -1 : 1;
     if (!validWifiPassword(wifiPassword.c_str())) {
         // New and upgraded boards receive an independent random WPA2 password.
         wifiPassword = randomHex(20);
@@ -274,7 +381,7 @@ void startAP() {
 }
 
 void printIdentity() {
-    Serial.println("\n=== ESP Link 1.2.6 / Wi-Fi ONLY / MOTOR A+B ===");
+    Serial.println("\n=== ESP Link 1.3.0 / Wi-Fi ONLY / ROBOT REMOTE ===");
     Serial.println("Device / Wi-Fi SSID: " + deviceName);
     Serial.println("Device token: " + deviceToken);
     Serial.println("Wi-Fi password: " + wifiPassword);
@@ -307,6 +414,7 @@ void rotateDeviceToken() {
 
 void processSerialCommand() {
     constexpr char tokenPrefix[] = "esplink:set-token:";
+    int first = 0, second = 0, third = 0, consumed = 0;
     if (strcmp(serialLine, "esplink:hello") == 0) {
         Serial.println("ESPLINK:WIFI-ONLY:1");
     } else if (strcmp(serialLine, "esplink:info") == 0) {
@@ -323,6 +431,30 @@ void processSerialCommand() {
         saveDeviceToken(next);
     } else if (strcmp(serialLine, "esplink:rotate-token") == 0) {
         rotateDeviceToken();
+    } else if (strcmp(serialLine, "esplink:battery-adc") == 0) {
+        Serial.printf("ESPLINK:BATTERY-ADC-MV:%d\n", batteryAdcMillivolts());
+    } else if (sscanf(serialLine, "esplink:bucket:%4d,%4d%n", &first, &second, &consumed) == 2 &&
+               consumed > 0 && serialLine[consumed] == '\0' && ((first == 0 && second == 0) || validBucket(first, second))) {
+        Preferences prefs;
+        if (!prefs.begin("esp-link", false) || !prefs.putUInt("bucket-pair", (static_cast<uint32_t>(first) << 16) | second)) {
+            Serial.println("ESPLINK:ERROR:NVS"); return;
+        }
+        Serial.println("ESPLINK:ROBOT-CONFIG-SAVED: press EN to apply");
+    } else if (sscanf(serialLine, "esplink:battery:%4d%n", &first, &consumed) == 1 && consumed > 0 &&
+               serialLine[consumed] == '\0' && (first == 0 || (first >= 850 && first <= 1150))) {
+        Preferences prefs;
+        if (!prefs.begin("esp-link", false) || !prefs.putUShort("battery-gain", first)) {
+            Serial.println("ESPLINK:ERROR:NVS"); return;
+        }
+        Serial.println("ESPLINK:ROBOT-CONFIG-SAVED: press EN to apply");
+    } else if (sscanf(serialLine, "esplink:tracks:%1d,%1d,%1d%n", &first, &second, &third, &consumed) == 3 &&
+               consumed > 0 && serialLine[consumed] == '\0' && (first | second | third) <= 1 &&
+               first >= 0 && second >= 0 && third >= 0) {
+        Preferences prefs;
+        if (!prefs.begin("esp-link", false) || !prefs.putUChar("track-flags", first | (second << 1) | (third << 2))) {
+            Serial.println("ESPLINK:ERROR:NVS"); return;
+        }
+        Serial.println("ESPLINK:ROBOT-CONFIG-SAVED: press EN to apply");
     } else {
         constexpr char prefix[] = "esplink:wifi-password:";
         if (strncmp(serialLine, prefix, sizeof(prefix) - 1) != 0) {
@@ -374,8 +506,10 @@ void writeLED() {
 
 void setup() {
     Serial.begin(115200);
-    motorAvailable = setupMotorOutputs() && xTaskCreate(motorTask, "motors", 3072, nullptr, 2, nullptr) == pdPASS;
-    if (!motorAvailable) Serial.println("ERROR: motor outputs unavailable");
+    const bool motorOutputs = setupMotorOutputs();
+    pinMode(BUCKET_PIN, OUTPUT);
+    digitalWrite(BUCKET_PIN, LOW);
+    analogSetPinAttenuation(BATTERY_PIN, ADC_11db);
     pinMode(LED_PIN, OUTPUT);
     writeLED();
     // No Bluetooth stack, services, advertising, scanning or connections are initialized.
@@ -387,6 +521,8 @@ void setup() {
     WiFi.onEvent([](WiFiEvent_t) { requestMotorStop(); }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
     WiFi.mode(WIFI_AP);
     loadIdentity();
+    motorAvailable = motorOutputs && xTaskCreate(motorTask, "motors", 3072, nullptr, 2, nullptr) == pdPASS;
+    if (!motorAvailable) Serial.println("ERROR: motor outputs unavailable");
     startAP();
     setupHTTP();
     printIdentity();

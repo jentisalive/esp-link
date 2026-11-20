@@ -16,7 +16,7 @@ def main():
         paths = [ROOT / "README.md", ROOT / ".gitignore", ROOT / ".gitattributes"]
         paths.extend(ROOT / name for name in ("flash_esp32.bat", "get_token.bat", "change_wifi_password.bat", "change_device_token.bat")
                      if (ROOT / name).is_file())
-        for name in ["ios", "android", "firmware", ".github", "scripts", "docs"]:
+        for name in ["ios", "android", "firmware", "remote", ".github", "scripts", "docs"]:
             paths.extend((ROOT / name).rglob("*"))
         for path in sorted(paths):
             relative = path.relative_to(ROOT)

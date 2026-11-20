@@ -95,8 +95,8 @@ class IPAMetadataTests(unittest.TestCase):
         path = Path(__file__).resolve().parents[1] / "ios/ESPLink/Info.plist"
         with path.open("rb") as source:
             info = plistlib.load(source)
-        info["CFBundleShortVersionString"] = "1.2.6"
-        info["CFBundleVersion"] = "6"
+        info["CFBundleShortVersionString"] = "1.3.0"
+        info["CFBundleVersion"] = "7"
         return info
 
     def verify(self, info):
@@ -129,7 +129,7 @@ class IPAMetadataTests(unittest.TestCase):
 
 
 class APKMetadataTests(unittest.TestCase):
-    METADATA = """package: name='dev.esplink.controller' versionCode='6' versionName='1.2.6'
+    METADATA = """package: name='dev.esplink.controller' versionCode='7' versionName='1.3.0'
 sdkVersion:'26'
 targetSdkVersion:'35'
 launchable-activity: name='dev.esplink.controller.MainActivity'

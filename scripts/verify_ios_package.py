@@ -25,7 +25,7 @@ def verify(path):
         raise ValueError("Built IPA is missing launch/scene configuration")
     if len(info.get("UISupportedInterfaceOrientations~ipad", [])) != 4:
         raise ValueError("Built IPA must declare all four iPad orientations")
-    if info.get("CFBundleShortVersionString") != "1.2.6" or info.get("CFBundleVersion") != "6":
+    if info.get("CFBundleShortVersionString") != "1.3.0" or info.get("CFBundleVersion") != "7":
         raise ValueError("Unexpected app version")
     print(f"IPA metadata verified: {info['CFBundleDisplayName']} {info['CFBundleShortVersionString']}")
     return info
