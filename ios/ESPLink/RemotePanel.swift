@@ -77,10 +77,14 @@ struct RemotePanel: UIViewRepresentable {
                 await prior?.value
                 guard let self, self.active, !Task.isCancelled else { return }
                 let (code, data) = await self.perform(op, body: body)
-                do {
-                    _ = try await web?.callAsyncJavaScript("window.espReply(id, {code, data});",
-                        arguments: ["id": id, "code": code, "data": data], in: nil, contentWorld: .page)
-                } catch { /* page has closed */ }
+                // Use the Objective-C callback API, not the Swift WebKit overlay that
+                // failed to load on the iOS 18.5 simulator.
+                let arguments: [Any] = [id, ["code": code, "data": data] as [String: Any]]
+                guard let json = try? JSONSerialization.data(withJSONObject: arguments) else { return }
+                let scriptData = String(decoding: json, as: UTF8.self)
+                    .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+                    .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+                web?.evaluateJavaScript("window.espReply.apply(null, \(scriptData));", completionHandler: nil)
             }
             if op != "status" { actuation = task }
         }

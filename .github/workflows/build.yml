@@ -50,6 +50,13 @@ jobs:
             -derivedDataPath build/device CODE_SIGNING_ALLOWED=NO
       - name: Package unsigned IPA and simulator app
         run: |
+          binary=build/device/Build/Products/Release-iphoneos/ESPLink.app/ESPLink
+          otool -L "$binary" > build/device-libraries.txt
+          if grep -q libswiftWebKit build/device-libraries.txt; then
+            cat build/device-libraries.txt
+            echo 'Unexpected Swift WebKit runtime dependency'
+            exit 1
+          fi
           mkdir -p build/package/Payload
           cp -R build/device/Build/Products/Release-iphoneos/ESPLink.app build/package/Payload/
           cd build/package
